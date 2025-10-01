@@ -1,10 +1,11 @@
 import streamlit as st
 import os
+import base64
 
 # --- PAGE CONFIG ---
 st.set_page_config(
     page_title="TruLine Betting",
-    page_icon="assets/logo.png",  # make sure logo.png is in assets/
+    page_icon="assets/logo.png",  # favicon in tab
     layout="wide"
 )
 
@@ -19,14 +20,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- HEADER (logo + title) ---
+# --- HEADER WITH LOGO ---
 logo_path = "assets/logo.png"
 
 if os.path.exists(logo_path):
+    # Convert logo to base64 so Streamlit can render it inline
+    with open(logo_path, "rb") as f:
+        logo_base64 = base64.b64encode(f.read()).decode()
     st.markdown(
         f"""
         <div style="display: flex; align-items: center; gap: 12px;">
-            <img src="data:image/png;base64,{open(logo_path, "rb").read().encode("base64").decode()}" width="60">
+            <img src="data:image/png;base64,{logo_base64}" width="60">
             <h1 style="margin: 0;">TruLine Betting</h1>
         </div>
         """,

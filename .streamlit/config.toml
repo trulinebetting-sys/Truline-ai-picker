@@ -1,7 +1,7 @@
 [theme]
 base="light"
-primaryColor="#0077b6"            # Bright blue for buttons/links
-backgroundColor="#ffffff"         # White background
-secondaryBackgroundColor="#f8f9fa" # Very light gray
-textColor="#0d1b2a"               # Dark navy text
+primaryColor="#0077b6"
+backgroundColor="#ffffff"
+secondaryBackgroundColor="#f8f9fa"
+textColor="#0d1b2a"
 font="sans serif"

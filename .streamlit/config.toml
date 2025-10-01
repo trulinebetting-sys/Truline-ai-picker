@@ -1,7 +1,7 @@
 [theme]
 base="light"
-primaryColor="#10B981"              # Emerald green for buttons and highlights
-backgroundColor="#FFFFFF"           # Clean white background
-secondaryBackgroundColor="#F9FAFB"  # Subtle gray background
-textColor="#111827"                 # Dark gray text
+primaryColor="#0077b6"            # Bright blue for buttons/links
+backgroundColor="#ffffff"         # White background
+secondaryBackgroundColor="#f8f9fa" # Very light gray
+textColor="#0d1b2a"               # Dark navy text
 font="sans serif"

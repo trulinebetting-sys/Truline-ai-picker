@@ -5,7 +5,7 @@ from ui import use_global_style, header, footer
 # --- PAGE CONFIG ---
 st.set_page_config(
     page_title="TruLine Betting",
-    page_icon="assets/logo.png",  # Use your logo instead of 🧠
+    page_icon="assets/logo.png",  # your logo in the browser tab
     layout="wide"
 )
 
@@ -43,7 +43,8 @@ with col1:
     )
 
 with col2:
-    st.image("assets/logo.png", use_container_width=True)  # Shows logo on homepage
+    # Homepage logo
+    st.image("assets/logo.png", use_container_width=True)
 
 # --- HOW IT WORKS ---
 st.markdown("---")

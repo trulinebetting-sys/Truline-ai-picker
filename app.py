@@ -3,11 +3,7 @@ import streamlit as st
 from ui import use_global_style, header, footer
 
 # --- PAGE CONFIG ---
-st.set_page_config(
-    page_title="TruLine Betting",
-    page_icon="assets/logo.png",  # logo also appears in tab bar (favicon)
-    layout="wide"
-)
+st.set_page_config(page_title="TruLine Betting", page_icon="assets/logo.png2", layout="wide")
 
 # --- HIDE SIDEBAR ---
 st.markdown(
@@ -25,18 +21,14 @@ use_global_style()
 header(active="Home")
 
 # --- HERO SECTION ---
-col1, _ = st.columns([7, 5], gap="large")
+col1, col2 = st.columns([7, 5], gap="large")
 
 with col1:
-    # small logo top-left
-    st.image("assets/logo.png", width=120)
     st.markdown(
         """
         <div class="hero">
             <h1>We scan the lines.<br>You place the bets.</h1>
-            <p class="lead">
-                Find high-edge opportunities using fair odds, vig removal, and bankroll controls.
-            </p>
+            <p class="lead">Find high-edge opportunities using fair odds, vig removal, and bankroll controls.</p>
             <div class="cta-row">
                 <a class="btn btn-primary" href="/Subscription">Try 7 Days Free</a>
                 <a class="btn btn-ghost" href="#how">How it works</a>
@@ -61,12 +53,11 @@ st.markdown(
 # --- EXPLORE TOOLS ---
 st.markdown("---")
 st.markdown("## Explore Tools")
-
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.markdown("### EV Finder")
-    st.page_link("pages/EV_Finder.py", label="Open")
+    st.markdown('<a class="btn btn-primary" href="/EV_Finder">Open</a>', unsafe_allow_html=True)
 
 with col2:
     st.markdown("### Arbitrage (coming soon)")

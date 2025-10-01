@@ -1,4 +1,8 @@
-# Truline AI Picker
+# TruLine Betting – AI Genius Picker
 
-This app uses AI to generate betting picks.  
-Built with Streamlit.
+An experimental **AI-powered betting assistant** that generates model-driven picks using team ratings, implied probabilities, and Kelly staking.  
+⚡ For **personal testing only** – not for distribution.
+
+---
+
+## 📂 Project Structure

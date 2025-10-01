@@ -1,7 +1,7 @@
 [theme]
 base="light"
-primaryColor="#e63946"
-backgroundColor="#ffffff"
-secondaryBackgroundColor="#f7f7f8"
-textColor="#0c0c0c"
+primaryColor="#10B981"              # Emerald green (buttons, highlights)
+backgroundColor="#FFFFFF"           # White background
+secondaryBackgroundColor="#F9FAFB"  # Light gray background for contrast
+textColor="#111827"                 # Dark gray (almost black) text
 font="sans serif"

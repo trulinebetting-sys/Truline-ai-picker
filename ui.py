@@ -59,30 +59,7 @@ def use_global_style():
         .btn-primary:hover {
             background-color: #c92c3c;
         }
-
-        /* Footer */
-        .footer {
-            margin-top: 3rem;
-            padding: 2rem;
-            background-color: #111;
-            color: #f5f5f5;
-            text-align: center;
-            border-top: 1px solid #333;
-        }
-
-        .footer a {
-            margin: 0 1rem;
-            color: #e63946;
-            text-decoration: none;
-            font-weight: 600;
-        }
-
-        .footer a:hover {
-            text-decoration: underline;
-        }
         </style>
-
-        <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;600;700&display=swap" rel="stylesheet">
         """,
         unsafe_allow_html=True,
     )
@@ -93,7 +70,7 @@ def header(active="Home"):
         <div class="navbar">
             <!-- Left -->
             <div class="navbar-left">
-                <img src="assets/logo.png" alt="TruLine Logo"/>
+                <img src="assets/logo.png2"/>
             </div>
 
             <!-- Center -->
@@ -118,7 +95,7 @@ def header(active="Home"):
 def footer():
     st.markdown(
         """
-        <div class="footer">
+        <div style="margin-top:3rem; padding:2rem; background:#111; color:#fff; text-align:center;">
             <p>© 2025 TruLine Betting</p>
             <p>
                 <a href="mailto:contact@trulinebetting.com">Contact</a> |

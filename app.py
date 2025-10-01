@@ -1,11 +1,9 @@
-from __future__ import annotations
 import streamlit as st
-from ui import use_global_style, header, footer
 
 # --- PAGE CONFIG ---
 st.set_page_config(
     page_title="TruLine Betting",
-    page_icon="assets/logo.png",  # your logo in the browser tab
+    page_icon="assets/logo.png",  # use your logo as favicon
     layout="wide"
 )
 
@@ -20,9 +18,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- GLOBAL STYLE + HEADER ---
-use_global_style()
-header(active="Home")
+# --- HEADER (logo + title) ---
+st.markdown(
+    """
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <img src="app/static/logo.png" width="60">
+        <h1 style="margin: 0;">TruLine Betting</h1>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # --- HERO SECTION ---
 col1, col2 = st.columns([7, 5], gap="large")
@@ -31,11 +36,10 @@ with col1:
     st.markdown(
         """
         <div class="hero">
-            <h1>We scan the lines.<br>You place the bets.</h1>
-            <p class="lead">Find high-edge opportunities using fair odds, vig removal, and bankroll controls.</p>
-            <div class="cta-row">
-                <a class="btn btn-primary" href="/Subscription">Try 7 Days Free</a>
-                <a class="btn btn-ghost" href="#how">How it works</a>
+            <h2>We scan the lines.<br>You place the bets.</h2>
+            <p class="lead">Find high-edge opportunities using AI-driven picks and bankroll controls.</p>
+            <div style="margin-top: 16px;">
+                <a class="btn btn-primary" href="#ai">Try AI Picks</a>
             </div>
         </div>
         """,
@@ -43,37 +47,24 @@ with col1:
     )
 
 with col2:
-    # Homepage logo
     st.image("assets/logo.png", use_container_width=True)
+
+# --- AI PICKER (placeholder for now) ---
+st.markdown("---")
+st.markdown("## 🔮 AI Genius Picks")
+st.info("This is where your AI betting picks will appear soon. 🚀")
 
 # --- HOW IT WORKS ---
 st.markdown("---")
-st.markdown("## How does Positive EV Betting work?")
+st.markdown("## How does AI Betting work?")
 st.markdown(
     """
-    - **Compute fair odds** by removing the bookmaker’s vig.  
-    - **Reference price**: Use a sharp book (like Pinnacle) when available.  
-    - **Find edge**: Bets where offered odds exceed fair odds.  
-    - **Stake sizing**: Uses capped Kelly.  
+    - **AI Predictions**: Analyze stats, trends, and odds.  
+    - **Find value bets**: Identify opportunities with positive edge.  
+    - **Smart bankroll management**: Avoid chasing losses, maximize ROI.  
     """
 )
 
-# --- EXPLORE TOOLS ---
-st.markdown("---")
-st.markdown("## Explore Tools")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown("### EV Finder")
-    st.page_link("pages/EV_Finder.py", label="Open")
-
-with col2:
-    st.markdown("### Arbitrage (coming soon)")
-    st.button("Coming soon", disabled=True)
-
-with col3:
-    st.markdown("### Parlay Builder (coming soon)")
-    st.button("Coming soon", disabled=True)
-
 # --- FOOTER ---
-footer()
+st.markdown("---")
+st.markdown("© 2025 TruLine Betting · Built with Streamlit")

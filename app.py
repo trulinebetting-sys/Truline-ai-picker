@@ -158,21 +158,34 @@ if fetch:
                 "Implied %", "Edge %", "Kelly %", "Units"
             ]]
 
+        # --- Moneylines
         with tabs[0]:
             st.subheader("Top 5 Moneyline Picks")
             ml = top_table(df, "h2h")
-            st.dataframe(ml, use_container_width=True) if not ml.empty else st.info("No edges found.")
+            if ml.empty:
+                st.info("No edges found.")
+            else:
+                st.dataframe(ml, use_container_width=True)
 
+        # --- Totals
         with tabs[1]:
             st.subheader("Top 5 Totals Picks")
             tot = top_table(df, "totals")
-            st.dataframe(tot, use_container_width=True) if not tot.empty else st.info("No edges found.")
+            if tot.empty:
+                st.info("No edges found.")
+            else:
+                st.dataframe(tot, use_container_width=True)
 
+        # --- Spreads
         with tabs[2]:
             st.subheader("Top 5 Spread Picks")
             sp = top_table(df, "spreads")
-            st.dataframe(sp, use_container_width=True) if not sp.empty else st.info("No edges found.")
+            if sp.empty:
+                st.info("No edges found.")
+            else:
+                st.dataframe(sp, use_container_width=True)
 
+        # --- Raw JSON Flattened
         with tabs[3]:
             st.subheader("Raw Odds Data")
             st.dataframe(df.head(50), use_container_width=True)

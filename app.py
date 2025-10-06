@@ -18,9 +18,6 @@ except ImportError:
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
-DEFAULT_BOOKS = [b.strip() for b in os.getenv(
-    "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
-).split(",") if b.strip()]
 DEFAULT_MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))
 DEFAULT_KELLY_CAP = float(os.getenv("KELLY_CAP", "0.25"))
 
@@ -136,10 +133,10 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Sort by best edge
+        # Sort by edge
         df = df.sort_values("Edge %", ascending=False)
 
-        # Banner for Best Pick
+        # Banner for best pick
         best = df.iloc[0]
         st.success(
             f"🔥 **Best Pick Today:** {best['Bet']} in {best['Matchup']} "
@@ -172,7 +169,7 @@ if fetch:
             st.subheader("Top 5 Totals Picks")
             tot = top_table(df, "totals")
             if tot.empty:
-                st.info("No edges found.")
+                st.info("No totals found.")
             else:
                 st.dataframe(tot, use_container_width=True)
 
@@ -181,11 +178,11 @@ if fetch:
             st.subheader("Top 5 Spread Picks")
             sp = top_table(df, "spreads")
             if sp.empty:
-                st.info("No edges found.")
+                st.info("No spreads found.")
             else:
                 st.dataframe(sp, use_container_width=True)
 
-        # --- Raw JSON Flattened
+        # --- Raw Data
         with tabs[3]:
             st.subheader("Raw Odds Data")
             st.dataframe(df.head(50), use_container_width=True)

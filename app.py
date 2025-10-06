@@ -36,7 +36,7 @@ st.caption("Live odds. AI confidence units. Three sections.")
 st.write("---")
 
 # ----------------------------
-# Helper functions
+# Helpers
 # ----------------------------
 def american_to_decimal(odds: float) -> float:
     if odds is None or pd.isna(odds):
@@ -85,9 +85,8 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     df = pd.json_normalize(r.json(), sep="_")
 
     # Add implied prob + units safely if price column exists
-    price_cols = [c for c in df.columns if "price" in c]
-    if price_cols:
-        df["implied_prob"] = df[price_cols[0]].apply(implied_prob_american)
+    if "bookmakers_0_markets_0_outcomes_0_price" in df.columns:
+        df["implied_prob"] = df["bookmakers_0_markets_0_outcomes_0_price"].apply(implied_prob_american)
         df["units"] = df["implied_prob"].apply(assign_units)
 
     return df
@@ -124,7 +123,7 @@ if fetch:
             sub = df[df["bookmakers_0_markets_0_key"] == market_key].copy()
             if sub.empty:
                 return sub
-            # Select columns safely
+
             cols = {
                 "commence_time": "Date/Time",
                 "home_team": "Home Team",
@@ -135,31 +134,27 @@ if fetch:
                 "units": "Units"
             }
             available = [c for c in cols if c in sub.columns]
-            return sub[available].rename(columns=cols).head(5)
+            out = sub[available].rename(columns=cols)
+
+            return out.sort_values("Units", ascending=False).head(5)
 
         with tabs[0]:
             st.subheader("Best Moneyline Picks (Top 5)")
             ml = format_display(df, "h2h")
-            if ml.empty:
-                st.info("No moneyline data available.")
-            else:
-                st.dataframe(ml, use_container_width=True)
+            st.dataframe(ml if not ml.empty else pd.DataFrame([{"Message": "No moneyline data"}]),
+                         use_container_width=True)
 
         with tabs[1]:
             st.subheader("Best Totals Picks (Top 5)")
             totals = format_display(df, "totals")
-            if totals.empty:
-                st.info("No totals data available.")
-            else:
-                st.dataframe(totals, use_container_width=True)
+            st.dataframe(totals if not totals.empty else pd.DataFrame([{"Message": "No totals data"}]),
+                         use_container_width=True)
 
         with tabs[2]:
             st.subheader("Best Spread Picks (Top 5)")
             spreads = format_display(df, "spreads")
-            if spreads.empty:
-                st.info("No spreads data available.")
-            else:
-                st.dataframe(spreads, use_container_width=True)
+            st.dataframe(spreads if not spreads.empty else pd.DataFrame([{"Message": "No spreads data"}]),
+                         use_container_width=True)
 
         with tabs[3]:
             st.subheader("Raw Odds Data")

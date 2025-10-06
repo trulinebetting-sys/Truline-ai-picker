@@ -60,11 +60,10 @@ def assign_units(prob: float) -> float:
 # Fetch Odds API
 # ----------------------------
 @st.cache_data(ttl=60)
-def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals") -> pd.DataFrame:
+def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"):
     if not ODDS_API_KEY:
         st.error("Missing ODDS_API_KEY. Add it to `.env` or Streamlit Secrets.")
-        return pd.DataFrame()
-
+        return []
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     params = {
         "apiKey": ODDS_API_KEY,
@@ -75,8 +74,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     r = requests.get(url, params=params, timeout=30)
     if r.status_code != 200:
         st.error(f"Odds API error {r.status_code}: {r.text}")
-        return pd.DataFrame()
-
+        return []
     return r.json()
 
 # ----------------------------
@@ -100,7 +98,6 @@ def extract_picks(data, market_type):
                     units = assign_units(prob)
                     point = o.get("point")
 
-                    # Label
                     if market_type == "h2h":
                         pick = name
                     elif market_type == "totals":
@@ -111,12 +108,12 @@ def extract_picks(data, market_type):
                         pick = name
 
                     rows.append({
+                        "Game": f"{home} vs {away}",
                         "Date/Time": pd.to_datetime(date).strftime("%b %d, %I:%M %p ET"),
-                        "Home": home,
-                        "Away": away,
                         "Sportsbook": book,
                         "Pick": pick,
                         "Odds (US)": price,
+                        "Confidence": prob,
                         "Units": units
                     })
 
@@ -124,7 +121,17 @@ def extract_picks(data, market_type):
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    return df.sort_values("Units", ascending=False).head(5).reset_index(drop=True)
+
+    # 🔑 Keep only the **best pick per game**
+    df = df.loc[df.groupby("Game")["Confidence"].idxmax()]
+
+    # Sort by confidence and keep top 5
+    df = df.sort_values("Confidence", ascending=False).head(5).reset_index(drop=True)
+
+    # Format confidence as %
+    df["Confidence"] = (df["Confidence"] * 100).round(1).astype(str) + "%"
+
+    return df
 
 # ----------------------------
 # Sidebar
@@ -149,17 +156,26 @@ if fetch:
         with tabs[0]:
             st.subheader("Top 5 Moneyline Picks")
             ml = extract_picks(data, "h2h")
-            st.dataframe(ml, use_container_width=True, hide_index=True) if not ml.empty else st.info("No moneyline data.")
+            if ml.empty:
+                st.info("No moneyline data available.")
+            else:
+                st.dataframe(ml, use_container_width=True, hide_index=True)
 
         with tabs[1]:
             st.subheader("Top 5 Totals Picks")
             totals = extract_picks(data, "totals")
-            st.dataframe(totals, use_container_width=True, hide_index=True) if not totals.empty else st.info("No totals data.")
+            if totals.empty:
+                st.info("No totals data available.")
+            else:
+                st.dataframe(totals, use_container_width=True, hide_index=True)
 
         with tabs[2]:
             st.subheader("Top 5 Spread Picks")
             spreads = extract_picks(data, "spreads")
-            st.dataframe(spreads, use_container_width=True, hide_index=True) if not spreads.empty else st.info("No spreads data.")
+            if spreads.empty:
+                st.info("No spreads data available.")
+            else:
+                st.dataframe(spreads, use_container_width=True, hide_index=True)
 
 else:
     st.info("Set filters in sidebar and click **Fetch Live Odds**.")

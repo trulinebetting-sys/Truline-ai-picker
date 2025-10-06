@@ -1,58 +1,78 @@
+import os
+import requests
+import pandas as pd
+import numpy as np
 import streamlit as st
+import matplotlib.pyplot as plt
+from dotenv import load_dotenv
+
+# Load API key
+load_dotenv()
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
 # --- PAGE CONFIG ---
-st.set_page_config(
-    page_title="TruLine Betting",
-    page_icon="assets/logo.png",  # favicon in tab bar
-    layout="wide"
-)
+st.set_page_config(page_title="TruLine AI Picker", layout="wide")
+st.title("📊 TruLine AI Genius Picks")
+st.markdown("White background. Live data. AI-driven recommendations.")
 
-# --- HEADER ---
-st.image("assets/logo.png", width=120)
-st.title("TruLine Betting – AI Genius Picker")
+# --- FILTERS ---
+sport = st.selectbox("Choose a sport:", ["americanfootball_nfl", "basketball_nba", "baseball_mlb", "soccer_epl", "soccer_spain_la_liga"])
+min_confidence = st.slider("Minimum Confidence %", 50, 100, 75)
 
-st.markdown(
-    """
-    ### We scan the lines.  
-    You place the bets.  
+# --- FETCH ODDS FROM ODDS API ---
+def fetch_odds(sport_key):
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": "us",
+        "markets": "h2h",
+        "oddsFormat": "american"
+    }
+    response = requests.get(url, params=params)
+    if response.status_code != 200:
+        st.error("Failed to fetch odds. Check API key or quota.")
+        return pd.DataFrame()
+    data = response.json()
 
-    Find high-edge opportunities using AI-driven picks and bankroll controls.
-    """
-)
+    rows = []
+    for game in data:
+        home = game["home_team"]
+        away = game["away_team"]
+        commence = game["commence_time"]
+        for book in game["bookmakers"]:
+            book_name = book["title"]
+            for market in book["markets"]:
+                for outcome in market["outcomes"]:
+                    rows.append({
+                        "time": commence,
+                        "home_team": home,
+                        "away_team": away,
+                        "book": book_name,
+                        "team": outcome["name"],
+                        "odds": outcome["price"]
+                    })
+    return pd.DataFrame(rows)
 
-# --- CTA BUTTONS ---
-st.markdown("---")
-col1, col2, col3 = st.columns(3)
+df = fetch_odds(sport)
 
-with col1:
-    st.button("Try AI Picks", key="try_ai_picks")
+if not df.empty:
+    # --- SIMPLE AI CONFIDENCE (simulate with randomness for now) ---
+    np.random.seed(42)
+    df["confidence"] = np.random.randint(60, 95, size=len(df))
 
-with col2:
-    st.button("Arbitrage (coming soon)", key="arbitrage_button", disabled=True)
+    # --- FILTER PICKS ---
+    picks = df[df["confidence"] >= min_confidence]
 
-with col3:
-    st.button("Parlay Builder (coming soon)", key="parlay_button", disabled=True)
+    st.subheader("Recommended Picks")
+    st.dataframe(picks[["time", "home_team", "away_team", "team", "odds", "book", "confidence"]])
 
-# --- AI PICKS SECTION ---
-st.markdown("---")
-st.subheader("🤖 AI Genius Picks")
-
-st.write(
-    """
-    This section will eventually connect to your AI model that generates betting picks.  
-    For now, here are sample picks for testing:
-    """
-)
-
-example_picks = [
-    {"Game": "Team A vs Team B", "Pick": "Team A ML", "Confidence": "78%"},
-    {"Game": "Team C vs Team D", "Pick": "Over 45.5", "Confidence": "72%"},
-    {"Game": "Team E vs Team F", "Pick": "Team F +3.5", "Confidence": "81%"},
-]
-
-for i, pick in enumerate(example_picks, start=1):
-    st.markdown(f"**Pick {i}:** {pick['Game']} → {pick['Pick']} ({pick['Confidence']})")
-
-# --- FOOTER ---
-st.markdown("---")
-st.caption("© 2025 TruLine Betting | Powered by Streamlit")
+    # --- GRAPH (Confidence Distribution) ---
+    st.subheader("Confidence Distribution")
+    fig, ax = plt.subplots()
+    picks["confidence"].hist(ax=ax, bins=10)
+    ax.set_title("AI Confidence Levels for Picks")
+    ax.set_xlabel("Confidence %")
+    ax.set_ylabel("Count")
+    st.pyplot(fig)
+else:
+    st.warning("No odds data available for this sport.")

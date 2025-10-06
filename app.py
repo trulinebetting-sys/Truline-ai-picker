@@ -134,7 +134,34 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        st.write("### Sample odds data")
-        st.dataframe(df.head(20), use_container_width=True)
+        # Format datetime
+        if "commence_time" in df.columns:
+            df["commence_time"] = pd.to_datetime(df["commence_time"])
+            df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
+
+        # Format odds
+        if "bookmakers_0_markets_0_outcomes_0_price" in df.columns:
+            df["bookmakers_0_markets_0_outcomes_0_price"] = df["bookmakers_0_markets_0_outcomes_0_price"].apply(
+                lambda x: f"{x:+}" if pd.notna(x) else ""
+            )
+
+        # Tabs for clean separation
+        tabs = st.tabs(["Moneylines", "Totals", "Spreads"])
+
+        with tabs[0]:
+            st.subheader("Moneyline Picks")
+            ml = df[df["bookmakers_0_markets_0_key"] == "h2h"]
+            st.dataframe(ml, use_container_width=True)
+
+        with tabs[1]:
+            st.subheader("Over/Under Picks")
+            totals = df[df["bookmakers_0_markets_0_key"] == "totals"]
+            st.dataframe(totals, use_container_width=True)
+
+        with tabs[2]:
+            st.subheader("Spread Picks")
+            spreads = df[df["bookmakers_0_markets_0_key"] == "spreads"]
+            st.dataframe(spreads, use_container_width=True)
+
 else:
     st.info("Set filters in sidebar and click **Fetch Live Odds**.")

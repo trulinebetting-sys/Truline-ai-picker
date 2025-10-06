@@ -97,7 +97,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                     odds = o.get("price")
                     line = o.get("point")
                     dec = american_to_decimal(odds)
-                    true_prob = implied_prob_american(odds)  # market prob
+                    true_prob = implied_prob_american(odds)
                     edge = dec * true_prob - 1
                     kelly = kelly_fraction(true_prob, dec, DEFAULT_KELLY_CAP)
                     rows.append({
@@ -110,7 +110,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "Implied %": f"{true_prob*100:.1f}%",
                         "Edge %": edge,
                         "Kelly %": f"{kelly*100:.1f}%",
-                        "Units": f"{kelly*40:.2f}"  # assume 40u bankroll
+                        "Units": f"{kelly*40:.2f}"
                     })
     return pd.DataFrame(rows)
 

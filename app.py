@@ -39,7 +39,6 @@ st.write("---")
 # Helper functions
 # ----------------------------
 def implied_prob_american(odds: float) -> float:
-    """Convert American odds → implied probability."""
     if odds is None or pd.isna(odds):
         return np.nan
     odds = float(odds)
@@ -48,7 +47,6 @@ def implied_prob_american(odds: float) -> float:
     return abs(odds) / (abs(odds) + 100.0)
 
 def assign_units(prob: float) -> float:
-    """Confidence → unit size mapping."""
     if pd.isna(prob):
         return 0.5
     if prob > 0.65:
@@ -85,44 +83,51 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
 # Format Display
 # ----------------------------
 def format_display(df, market_key):
-    """Extract and clean table for a specific market."""
-    market_cols = [c for c in df.columns if "markets" in c and c.endswith("key")]
+    """Extract bets for a given market (h2h/totals/spreads)."""
+    market_cols = [c for c in df.columns if c.endswith("key") and "markets" in c]
     if not market_cols:
         return pd.DataFrame()
-    market_col = market_cols[0]
 
-    sub = df[df[market_col] == market_key].copy()
-    if sub.empty:
-        return sub
+    results = []
+    for col in market_cols:
+        sub = df[df[col] == market_key].copy()
+        if sub.empty:
+            continue
 
-    # Identify pick & odds columns
-    pick_col = next((c for c in sub.columns if c.endswith("outcomes_0_name")), None)
-    price_col = next((c for c in sub.columns if c.endswith("outcomes_0_price")), None)
+        pick_col = col.replace("key", "outcomes_0_name")
+        price_col = col.replace("key", "outcomes_0_price")
 
-    if price_col:
-        sub["prob"] = sub[price_col].apply(implied_prob_american)
-        sub["Units"] = sub["prob"].apply(assign_units)
+        if price_col in sub.columns:
+            sub["prob"] = sub[price_col].apply(implied_prob_american)
+            sub["Units"] = sub["prob"].apply(assign_units)
 
-    # Build clean table
-    cols = {
-        "commence_time": "Date/Time",
-        "home_team": "Home",
-        "away_team": "Away",
-        "bookmakers_0_title": "Sportsbook",
-    }
-    if pick_col: cols[pick_col] = "Pick"
-    if price_col: cols[price_col] = "Odds (US)"
-    if "Units" in sub.columns: cols["Units"] = "Units"
+        # Build clean table
+        cols = {
+            "commence_time": "Date/Time",
+            "home_team": "Home",
+            "away_team": "Away",
+            "bookmakers_0_title": "Sportsbook",
+        }
+        if pick_col in sub.columns: cols[pick_col] = "Pick"
+        if price_col in sub.columns: cols[price_col] = "Odds (US)"
+        if "Units" in sub.columns: cols["Units"] = "Units"
 
-    available = [c for c in cols if c in sub.columns]
-    out = sub[available].rename(columns=cols)
+        available = [c for c in cols if c in sub.columns]
+        cleaned = sub[available].rename(columns=cols)
 
-    # Clean up datetime
-    if "Date/Time" in out.columns:
-        out["Date/Time"] = pd.to_datetime(out["Date/Time"], errors="coerce")
-        out["Date/Time"] = out["Date/Time"].dt.strftime("%b %d, %I:%M %p ET")
+        # Clean datetime
+        if "Date/Time" in cleaned.columns:
+            cleaned["Date/Time"] = pd.to_datetime(cleaned["Date/Time"], errors="coerce")
+            cleaned["Date/Time"] = cleaned["Date/Time"].dt.strftime("%b %d, %I:%M %p ET")
 
-    # Top 5 picks
+        results.append(cleaned)
+
+    if not results:
+        return pd.DataFrame()
+
+    out = pd.concat(results, ignore_index=True)
+
+    # Top 5 by Units
     if "Units" in out.columns:
         out = out.sort_values("Units", ascending=False).head(5)
 
@@ -151,26 +156,17 @@ if fetch:
         with tabs[0]:
             st.subheader("Top 5 Moneyline Picks")
             ml = format_display(df, "h2h")
-            if ml.empty:
-                st.info("No moneyline data available.")
-            else:
-                st.dataframe(ml, use_container_width=True, hide_index=True)
+            st.dataframe(ml, use_container_width=True, hide_index=True) if not ml.empty else st.info("No moneyline data.")
 
         with tabs[1]:
-            st.subheader("Top 5 Totals Picks (Over/Under)")
+            st.subheader("Top 5 Totals Picks")
             totals = format_display(df, "totals")
-            if totals.empty:
-                st.info("No totals data available.")
-            else:
-                st.dataframe(totals, use_container_width=True, hide_index=True)
+            st.dataframe(totals, use_container_width=True, hide_index=True) if not totals.empty else st.info("No totals data.")
 
         with tabs[2]:
             st.subheader("Top 5 Spread Picks")
             spreads = format_display(df, "spreads")
-            if spreads.empty:
-                st.info("No spreads data available.")
-            else:
-                st.dataframe(spreads, use_container_width=True, hide_index=True)
+            st.dataframe(spreads, use_container_width=True, hide_index=True) if not spreads.empty else st.info("No spreads data.")
 
         with tabs[3]:
             st.subheader("Raw Odds Data")

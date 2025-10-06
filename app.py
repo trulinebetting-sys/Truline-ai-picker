@@ -60,35 +60,6 @@ def implied_prob_american(odds: float) -> float:
         return 100.0 / (odds + 100.0)
     return abs(odds) / (abs(odds) + 100.0)
 
-def no_vig_probs(implied_probs: List[float]) -> List[float]:
-    vals = [p for p in implied_probs if p is not None and not pd.isna(p)]
-    s = sum(vals)
-    if s <= 0:
-        return implied_probs
-    return [p / s if (p is not None and not pd.isna(p)) else np.nan for p in implied_probs]
-
-def kelly_fraction(true_p: float, dec_odds: float) -> float:
-    if true_p is None or pd.isna(true_p) or dec_odds is None or pd.isna(dec_odds):
-        return 0.0
-    b = dec_odds - 1.0
-    q = 1.0 - true_p
-    f = (b * true_p - q) / b if b > 0 else 0.0
-    return max(0.0, f)
-
-def edge_from_true_p(dec_odds: float, true_p: float) -> float:
-    if dec_odds is None or pd.isna(dec_odds) or true_p is None or pd.isna(true_p):
-        return np.nan
-    return dec_odds * true_p - 1.0
-
-def fmt_pct(x: float) -> str:
-    return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
-
-def fmt_dec(x: float) -> str:
-    return "" if (x is None or pd.isna(x)) else f"{x:.2f}"
-
-def usd(x: float) -> str:
-    return "" if (x is None or pd.isna(x)) else f"${x:,.2f}"
-
 # ----------------------------
 # Fetch Odds API
 # ----------------------------
@@ -134,34 +105,51 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Format datetime
+        # Format datetime if exists
         if "commence_time" in df.columns:
             df["commence_time"] = pd.to_datetime(df["commence_time"])
             df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
-        # Format odds
-        if "bookmakers_0_markets_0_outcomes_0_price" in df.columns:
-            df["bookmakers_0_markets_0_outcomes_0_price"] = df["bookmakers_0_markets_0_outcomes_0_price"].apply(
-                lambda x: f"{x:+}" if pd.notna(x) else ""
-            )
+        # Tabs
+        tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-        # Tabs for clean separation
-        tabs = st.tabs(["Moneylines", "Totals", "Spreads"])
+        def safe_filter(df, key, value):
+            """Helper to avoid KeyError if column missing"""
+            if key not in df.columns:
+                return pd.DataFrame()
+            return df[df[key] == value]
 
+        # --- Moneylines
         with tabs[0]:
             st.subheader("Moneyline Picks")
-            ml = df[df["bookmakers_0_markets_0_key"] == "h2h"]
-            st.dataframe(ml, use_container_width=True)
+            ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
+            if ml.empty:
+                st.info("No moneyline data available.")
+            else:
+                st.dataframe(ml, use_container_width=True)
 
+        # --- Totals
         with tabs[1]:
             st.subheader("Over/Under Picks")
-            totals = df[df["bookmakers_0_markets_0_key"] == "totals"]
-            st.dataframe(totals, use_container_width=True)
+            totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
+            if totals.empty:
+                st.info("No totals data available.")
+            else:
+                st.dataframe(totals, use_container_width=True)
 
+        # --- Spreads
         with tabs[2]:
             st.subheader("Spread Picks")
-            spreads = df[df["bookmakers_0_markets_0_key"] == "spreads"]
-            st.dataframe(spreads, use_container_width=True)
+            spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
+            if spreads.empty:
+                st.info("No spreads data available.")
+            else:
+                st.dataframe(spreads, use_container_width=True)
+
+        # --- Raw JSON Flattened
+        with tabs[3]:
+            st.subheader("Raw Odds Data")
+            st.dataframe(df.head(50), use_container_width=True)
 
 else:
     st.info("Set filters in sidebar and click **Fetch Live Odds**.")

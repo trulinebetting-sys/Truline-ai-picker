@@ -37,7 +37,7 @@ SPORT_OPTIONS = {
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Simple. Live odds. Three sections. Units recommended with capped Kelly.")
+st.caption("AI-driven best bets with Kelly staking. Only Top 5 picks per market.")
 st.write("---")
 
 # ----------------------------
@@ -75,7 +75,6 @@ def clean_and_rank(df: pd.DataFrame, market_type: str, bankroll: float, unit_siz
         return pd.DataFrame()
 
     df = df[df["market_key"] == market_type].copy()
-
     if df.empty:
         return pd.DataFrame()
 
@@ -89,12 +88,28 @@ def clean_and_rank(df: pd.DataFrame, market_type: str, bankroll: float, unit_siz
     df["stake_$"] = (df["kelly_capped"] * bankroll).clip(lower=0.0)
     df["units"] = df["stake_$"] / unit_size
 
-    # Drop duplicates (only keep best odds per outcome across books)
+    # Drop duplicates (keep best odds per outcome across books)
     df = df.sort_values(by="edge", ascending=False)
     df = df.drop_duplicates(subset=["id", "name"], keep="first")
 
-    # Sort best picks at top
-    return df.sort_values(by="edge", ascending=False)
+    # Format display columns
+    df["Edge %"] = (df["edge"] * 100).round(2).astype(str) + "%"
+    df["Implied %"] = (df["implied_prob"] * 100).round(1).astype(str) + "%"
+    df["True %"] = (df["true_prob"] * 100).round(1).astype(str) + "%"
+    df["Units"] = df["units"].round(2)
+    df["Stake ($)"] = df["stake_$"].round(2)
+    df["Odds"] = df["price"].astype(str) + f" / " + df["dec_odds"].round(2).astype(str)
+
+    # Final columns
+    df = df.rename(columns={
+        "commence_time": "Date/Time",
+        "home_team": "Home",
+        "away_team": "Away",
+        "name": "Bet",
+        "book": "Book"
+    })
+
+    return df[["Date/Time", "Home", "Away", "Bet", "Odds", "Book", "Implied %", "True %", "Edge %", "Stake ($)", "Units"]].head(5)
 
 # ----------------------------
 # Fetch Odds API
@@ -157,49 +172,41 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Format datetime if exists
         df["commence_time"] = pd.to_datetime(df["commence_time"])
         df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
-        # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
         # --- Moneylines
         with tabs[0]:
-            st.subheader("Moneyline Picks")
+            st.subheader("Top 5 Moneyline Picks")
             ml = clean_and_rank(df, "h2h", bankroll, unit_size, kelly_cap)
             if ml.empty:
                 st.info("No moneyline data available.")
             else:
-                best = ml.iloc[0]
-                st.success(f"💡 Best Pick: {best['name']} vs {best['away_team']} at {best['book']} ({best['price']}) | Edge: {best['edge']:.2%}, Units: {best['units']:.2f}")
                 st.dataframe(ml, use_container_width=True)
 
         # --- Totals
         with tabs[1]:
-            st.subheader("Over/Under Picks")
+            st.subheader("Top 5 Totals Picks")
             totals = clean_and_rank(df, "totals", bankroll, unit_size, kelly_cap)
             if totals.empty:
                 st.info("No totals data available.")
             else:
-                best = totals.iloc[0]
-                st.success(f"💡 Best Pick: {best['name']} {best['away_team']} at {best['book']} ({best['price']}) | Edge: {best['edge']:.2%}, Units: {best['units']:.2f}")
                 st.dataframe(totals, use_container_width=True)
 
         # --- Spreads
         with tabs[2]:
-            st.subheader("Spread Picks")
+            st.subheader("Top 5 Spread Picks")
             spreads = clean_and_rank(df, "spreads", bankroll, unit_size, kelly_cap)
             if spreads.empty:
                 st.info("No spreads data available.")
             else:
-                best = spreads.iloc[0]
-                st.success(f"💡 Best Pick: {best['name']} {best['away_team']} at {best['book']} ({best['price']}) | Edge: {best['edge']:.2%}, Units: {best['units']:.2f}")
                 st.dataframe(spreads, use_container_width=True)
 
-        # --- Raw JSON Flattened
+        # --- Raw Data
         with tabs[3]:
-            st.subheader("Raw Odds Data")
+            st.subheader("Raw Odds Data (debugging)")
             st.dataframe(df.head(50), use_container_width=True)
 
 else:

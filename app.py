@@ -36,7 +36,7 @@ st.caption("Live odds. AI confidence units. Three sections.")
 st.write("---")
 
 # ----------------------------
-# Odds helper functions
+# Helper functions
 # ----------------------------
 def american_to_decimal(odds: float) -> float:
     if odds is None or pd.isna(odds):
@@ -53,7 +53,6 @@ def implied_prob_american(odds: float) -> float:
     return abs(odds) / (abs(odds) + 100.0)
 
 def assign_units(prob: float) -> float:
-    """Assign units based on true probability (confidence bucket)."""
     if pd.isna(prob):
         return 0
     if prob > 0.70:
@@ -77,12 +76,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         return pd.DataFrame()
 
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "regions": regions,
-        "markets": markets,
-        "oddsFormat": "american"
-    }
+    params = {"apiKey": ODDS_API_KEY, "regions": regions, "markets": markets, "oddsFormat": "american"}
     r = requests.get(url, params=params, timeout=30)
     if r.status_code != 200:
         st.error(f"Odds API error {r.status_code}: {r.text}")
@@ -90,9 +84,10 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
 
     df = pd.json_normalize(r.json(), sep="_")
 
-    # Calculate implied probability and units if odds exist
-    if "bookmakers_0_markets_0_outcomes_0_price" in df.columns:
-        df["implied_prob"] = df["bookmakers_0_markets_0_outcomes_0_price"].apply(implied_prob_american)
+    # Add implied prob + units safely if price column exists
+    price_cols = [c for c in df.columns if "price" in c]
+    if price_cols:
+        df["implied_prob"] = df[price_cols[0]].apply(implied_prob_american)
         df["units"] = df["implied_prob"].apply(assign_units)
 
     return df
@@ -120,16 +115,16 @@ if fetch:
             df["commence_time"] = pd.to_datetime(df["commence_time"])
             df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
-        # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-        def safe_filter(df, key, value):
-            if key not in df.columns:
+        def format_display(df, market_key):
+            """Extract and clean display table for a market"""
+            if "bookmakers_0_markets_0_key" not in df.columns:
                 return pd.DataFrame()
-            return df[df[key] == value]
-
-        def format_display(df):
-            """Clean up table with selected columns only."""
+            sub = df[df["bookmakers_0_markets_0_key"] == market_key].copy()
+            if sub.empty:
+                return sub
+            # Select columns safely
             cols = {
                 "commence_time": "Date/Time",
                 "home_team": "Home Team",
@@ -139,37 +134,33 @@ if fetch:
                 "bookmakers_0_markets_0_outcomes_0_price": "Odds (US)",
                 "units": "Units"
             }
-            available = [c for c in cols.keys() if c in df.columns]
-            return df[available].rename(columns=cols).head(5)
+            available = [c for c in cols if c in sub.columns]
+            return sub[available].rename(columns=cols).head(5)
 
-        # --- Moneylines
         with tabs[0]:
             st.subheader("Best Moneyline Picks (Top 5)")
-            ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
+            ml = format_display(df, "h2h")
             if ml.empty:
                 st.info("No moneyline data available.")
             else:
-                st.dataframe(format_display(ml), use_container_width=True)
+                st.dataframe(ml, use_container_width=True)
 
-        # --- Totals
         with tabs[1]:
             st.subheader("Best Totals Picks (Top 5)")
-            totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
+            totals = format_display(df, "totals")
             if totals.empty:
                 st.info("No totals data available.")
             else:
-                st.dataframe(format_display(totals), use_container_width=True)
+                st.dataframe(totals, use_container_width=True)
 
-        # --- Spreads
         with tabs[2]:
             st.subheader("Best Spread Picks (Top 5)")
-            spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
+            spreads = format_display(df, "spreads")
             if spreads.empty:
                 st.info("No spreads data available.")
             else:
-                st.dataframe(format_display(spreads), use_container_width=True)
+                st.dataframe(spreads, use_container_width=True)
 
-        # --- Raw JSON Flattened
         with tabs[3]:
             st.subheader("Raw Odds Data")
             st.dataframe(df.head(50), use_container_width=True)

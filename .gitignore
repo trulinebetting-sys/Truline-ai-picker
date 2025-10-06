@@ -1,14 +1,2 @@
-# Python cache
-__pycache__/
-*.py[cod]
-
-# Environment files
 .env
-venv/
-.venv/
-
-# Streamlit internal
-.streamlit/secrets.toml
-
-# OS-specific
-.DS_Store
+__pycache__/

@@ -18,6 +18,11 @@ except ImportError:
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
+DEFAULT_BOOKS = [b.strip() for b in os.getenv(
+    "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
+).split(",") if b.strip()]
+DEFAULT_MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))
+DEFAULT_KELLY_CAP = float(os.getenv("KELLY_CAP", "0.25"))
 
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
@@ -32,18 +37,12 @@ SPORT_OPTIONS = {
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Live odds. AI confidence units. Three sections.")
+st.caption("Simple. Live odds. Three sections. Units recommended with capped Kelly.")
 st.write("---")
 
 # ----------------------------
-# Helpers
+# Odds helper functions
 # ----------------------------
-def american_to_decimal(odds: float) -> float:
-    if odds is None or pd.isna(odds):
-        return np.nan
-    odds = float(odds)
-    return 1 + (odds / 100.0) if odds > 0 else 1 + (100.0 / abs(odds))
-
 def implied_prob_american(odds: float) -> float:
     if odds is None or pd.isna(odds):
         return np.nan
@@ -53,18 +52,15 @@ def implied_prob_american(odds: float) -> float:
     return abs(odds) / (abs(odds) + 100.0)
 
 def assign_units(prob: float) -> float:
+    """Simple confidence → unit size mapping."""
     if pd.isna(prob):
-        return 0
-    if prob > 0.70:
-        return 3.0
-    elif prob > 0.60:
-        return 2.0
-    elif prob > 0.55:
-        return 1.5
-    elif prob > 0.50:
-        return 1.0
-    else:
         return 0.5
+    if prob > 0.65:
+        return 3.0
+    elif prob > 0.55:
+        return 2.0
+    else:
+        return 1.0
 
 # ----------------------------
 # Fetch Odds API
@@ -76,20 +72,56 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         return pd.DataFrame()
 
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {"apiKey": ODDS_API_KEY, "regions": regions, "markets": markets, "oddsFormat": "american"}
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": regions,
+        "markets": markets,
+        "oddsFormat": "american"
+    }
     r = requests.get(url, params=params, timeout=30)
     if r.status_code != 200:
         st.error(f"Odds API error {r.status_code}: {r.text}")
         return pd.DataFrame()
 
-    df = pd.json_normalize(r.json(), sep="_")
+    return pd.json_normalize(r.json(), sep="_")
 
-    # Add implied prob + units safely if price column exists
-    if "bookmakers_0_markets_0_outcomes_0_price" in df.columns:
-        df["implied_prob"] = df["bookmakers_0_markets_0_outcomes_0_price"].apply(implied_prob_american)
-        df["units"] = df["implied_prob"].apply(assign_units)
+# ----------------------------
+# Format Display
+# ----------------------------
+def format_display(df, market_key):
+    """Extract and clean display table for a market (auto-detect column names)."""
+    # Detect correct market key column
+    market_cols = [c for c in df.columns if "markets" in c and c.endswith("key")]
+    if not market_cols:
+        return pd.DataFrame()
+    market_col = market_cols[0]
 
-    return df
+    sub = df[df[market_col] == market_key].copy()
+    if sub.empty:
+        return sub
+
+    # Detect pick & price columns dynamically
+    pick_col = next((c for c in df.columns if c.endswith("outcomes_0_name")), None)
+    price_col = next((c for c in df.columns if c.endswith("outcomes_0_price")), None)
+
+    if price_col and price_col in sub.columns:
+        sub["prob"] = sub[price_col].apply(implied_prob_american)
+        sub["units"] = sub["prob"].apply(assign_units)
+
+    cols = {
+        "commence_time": "Date/Time",
+        "home_team": "Home Team",
+        "away_team": "Away Team",
+        "bookmakers_0_title": "Sportsbook",
+    }
+    if pick_col: cols[pick_col] = "Pick"
+    if price_col: cols[price_col] = "Odds (US)"
+    if "units" in sub.columns: cols["units"] = "Units"
+
+    available = [c for c in cols if c in sub.columns]
+    out = sub[available].rename(columns=cols)
+
+    return out.sort_values("Units", ascending=False).head(5)
 
 # ----------------------------
 # Sidebar filters
@@ -109,52 +141,35 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Format datetime
         if "commence_time" in df.columns:
-            df["commence_time"] = pd.to_datetime(df["commence_time"])
+            df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
             df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-        def format_display(df, market_key):
-            """Extract and clean display table for a market"""
-            if "bookmakers_0_markets_0_key" not in df.columns:
-                return pd.DataFrame()
-            sub = df[df["bookmakers_0_markets_0_key"] == market_key].copy()
-            if sub.empty:
-                return sub
-
-            cols = {
-                "commence_time": "Date/Time",
-                "home_team": "Home Team",
-                "away_team": "Away Team",
-                "bookmakers_0_title": "Sportsbook",
-                "bookmakers_0_markets_0_outcomes_0_name": "Pick",
-                "bookmakers_0_markets_0_outcomes_0_price": "Odds (US)",
-                "units": "Units"
-            }
-            available = [c for c in cols if c in sub.columns]
-            out = sub[available].rename(columns=cols)
-
-            return out.sort_values("Units", ascending=False).head(5)
-
         with tabs[0]:
-            st.subheader("Best Moneyline Picks (Top 5)")
+            st.subheader("Best Moneyline Picks")
             ml = format_display(df, "h2h")
-            st.dataframe(ml if not ml.empty else pd.DataFrame([{"Message": "No moneyline data"}]),
-                         use_container_width=True)
+            if ml.empty:
+                st.info("No moneyline data available.")
+            else:
+                st.dataframe(ml, use_container_width=True, hide_index=True)
 
         with tabs[1]:
-            st.subheader("Best Totals Picks (Top 5)")
+            st.subheader("Best Totals (O/U) Picks")
             totals = format_display(df, "totals")
-            st.dataframe(totals if not totals.empty else pd.DataFrame([{"Message": "No totals data"}]),
-                         use_container_width=True)
+            if totals.empty:
+                st.info("No totals data available.")
+            else:
+                st.dataframe(totals, use_container_width=True, hide_index=True)
 
         with tabs[2]:
-            st.subheader("Best Spread Picks (Top 5)")
+            st.subheader("Best Spread Picks")
             spreads = format_display(df, "spreads")
-            st.dataframe(spreads if not spreads.empty else pd.DataFrame([{"Message": "No spreads data"}]),
-                         use_container_width=True)
+            if spreads.empty:
+                st.info("No spreads data available.")
+            else:
+                st.dataframe(spreads, use_container_width=True, hide_index=True)
 
         with tabs[3]:
             st.subheader("Raw Odds Data")

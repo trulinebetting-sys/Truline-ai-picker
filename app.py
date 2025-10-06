@@ -52,6 +52,15 @@ def implied_prob_american(odds: float) -> float:
         return 100.0 / (odds + 100.0)
     return abs(odds) / (abs(odds) + 100.0)
 
+def kelly_fraction(true_p: float, dec_odds: float) -> float:
+    """Basic Kelly formula"""
+    if pd.isna(true_p) or pd.isna(dec_odds) or dec_odds <= 1.0:
+        return 0.0
+    b = dec_odds - 1
+    q = 1 - true_p
+    f = (b*true_p - q) / b
+    return max(0.0, f)
+
 # ----------------------------
 # Fetch Odds API
 # ----------------------------
@@ -103,6 +112,10 @@ with st.sidebar:
     st.header("Filters")
     sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
     regions = st.text_input("Regions", value=DEFAULT_REGIONS)
+    bankroll = st.number_input("Bankroll ($)", min_value=100.0, value=1000.0, step=50.0)
+    unit_size = st.number_input("Unit size ($)", min_value=1.0, value=25.0, step=1.0)
+    min_edge = st.slider("Min Edge (%)", 0.0, 10.0, 1.0, 0.25) / 100.0
+    kelly_cap = st.slider("Kelly Cap", 0.0, 1.0, 0.25, 0.05)
     fetch = st.button("Fetch Live Odds")
 
 # ----------------------------
@@ -117,37 +130,57 @@ if fetch:
         # Format datetime if exists
         if "commence_time" in df.columns:
             df["commence_time"] = pd.to_datetime(df["commence_time"])
-            df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
+            df["Date/Time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
+
+        # Build Pick column
+        df["Pick"] = df.apply(lambda r: f"{r['name']} {r['point']}" if pd.notna(r['point']) else r['name'], axis=1)
+
+        # Implied probability + Kelly stake
+        df["Decimal Odds"] = df["price"].apply(american_to_decimal)
+        df["True Prob"] = df["price"].apply(implied_prob_american)
+        df["Kelly"] = df.apply(lambda r: min(kelly_fraction(r["True Prob"], r["Decimal Odds"]), kelly_cap), axis=1)
+        df["Stake ($)"] = (df["Kelly"] * bankroll).round(2)
+        df["Units"] = (df["Stake ($)"] / unit_size).round(2)
 
         # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
+        def clean_table(sub):
+            return sub[[
+                "Date/Time", "home_team", "away_team", "book", "Pick", "price", "Stake ($)", "Units"
+            ]].rename(columns={
+                "home_team": "Home",
+                "away_team": "Away",
+                "book": "Sportsbook",
+                "price": "Odds (US)"
+            }).sort_values(by="Units", ascending=False).head(5)
+
         # --- Moneylines
         with tabs[0]:
-            st.subheader("Moneyline Picks")
+            st.subheader("Top 5 Moneyline Picks")
             ml = df[df["market"] == "h2h"]
             if ml.empty:
                 st.info("No moneyline data available.")
             else:
-                st.dataframe(ml, use_container_width=True)
+                st.dataframe(clean_table(ml), use_container_width=True)
 
         # --- Totals
         with tabs[1]:
-            st.subheader("Over/Under Picks")
+            st.subheader("Top 5 Totals (Over/Under) Picks")
             totals = df[df["market"] == "totals"]
             if totals.empty:
                 st.info("No totals data available.")
             else:
-                st.dataframe(totals, use_container_width=True)
+                st.dataframe(clean_table(totals), use_container_width=True)
 
         # --- Spreads
         with tabs[2]:
-            st.subheader("Spread Picks")
+            st.subheader("Top 5 Spread Picks")
             spreads = df[df["market"] == "spreads"]
             if spreads.empty:
                 st.info("No spreads data available.")
             else:
-                st.dataframe(spreads, use_container_width=True)
+                st.dataframe(clean_table(spreads), use_container_width=True)
 
         # --- Raw JSON Flattened
         with tabs[3]:

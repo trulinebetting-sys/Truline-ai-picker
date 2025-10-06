@@ -18,11 +18,6 @@ except ImportError:
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
-DEFAULT_BOOKS = [b.strip() for b in os.getenv(
-    "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
-).split(",") if b.strip()]
-DEFAULT_MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))
-DEFAULT_KELLY_CAP = float(os.getenv("KELLY_CAP", "0.25"))
 
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
@@ -37,13 +32,14 @@ SPORT_OPTIONS = {
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Simple. Live odds. Three sections. Units recommended with capped Kelly.")
+st.caption("Live odds. Top 5 picks for each market. Unit size based on confidence.")
 st.write("---")
 
 # ----------------------------
-# Odds helper functions
+# Helper functions
 # ----------------------------
 def implied_prob_american(odds: float) -> float:
+    """Convert American odds → implied probability."""
     if odds is None or pd.isna(odds):
         return np.nan
     odds = float(odds)
@@ -52,7 +48,7 @@ def implied_prob_american(odds: float) -> float:
     return abs(odds) / (abs(odds) + 100.0)
 
 def assign_units(prob: float) -> float:
-    """Simple confidence → unit size mapping."""
+    """Confidence → unit size mapping."""
     if pd.isna(prob):
         return 0.5
     if prob > 0.65:
@@ -89,8 +85,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
 # Format Display
 # ----------------------------
 def format_display(df, market_key):
-    """Extract and clean display table for a market (auto-detect column names)."""
-    # Detect correct market key column
+    """Extract and clean table for a specific market."""
     market_cols = [c for c in df.columns if "markets" in c and c.endswith("key")]
     if not market_cols:
         return pd.DataFrame()
@@ -100,28 +95,38 @@ def format_display(df, market_key):
     if sub.empty:
         return sub
 
-    # Detect pick & price columns dynamically
-    pick_col = next((c for c in df.columns if c.endswith("outcomes_0_name")), None)
-    price_col = next((c for c in df.columns if c.endswith("outcomes_0_price")), None)
+    # Identify pick & odds columns
+    pick_col = next((c for c in sub.columns if c.endswith("outcomes_0_name")), None)
+    price_col = next((c for c in sub.columns if c.endswith("outcomes_0_price")), None)
 
-    if price_col and price_col in sub.columns:
+    if price_col:
         sub["prob"] = sub[price_col].apply(implied_prob_american)
-        sub["units"] = sub["prob"].apply(assign_units)
+        sub["Units"] = sub["prob"].apply(assign_units)
 
+    # Build clean table
     cols = {
         "commence_time": "Date/Time",
-        "home_team": "Home Team",
-        "away_team": "Away Team",
+        "home_team": "Home",
+        "away_team": "Away",
         "bookmakers_0_title": "Sportsbook",
     }
     if pick_col: cols[pick_col] = "Pick"
     if price_col: cols[price_col] = "Odds (US)"
-    if "units" in sub.columns: cols["units"] = "Units"
+    if "Units" in sub.columns: cols["Units"] = "Units"
 
     available = [c for c in cols if c in sub.columns]
     out = sub[available].rename(columns=cols)
 
-    return out.sort_values("Units", ascending=False).head(5)
+    # Clean up datetime
+    if "Date/Time" in out.columns:
+        out["Date/Time"] = pd.to_datetime(out["Date/Time"], errors="coerce")
+        out["Date/Time"] = out["Date/Time"].dt.strftime("%b %d, %I:%M %p ET")
+
+    # Top 5 picks
+    if "Units" in out.columns:
+        out = out.sort_values("Units", ascending=False).head(5)
+
+    return out.reset_index(drop=True)
 
 # ----------------------------
 # Sidebar filters
@@ -141,14 +146,10 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        if "commence_time" in df.columns:
-            df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
-            df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
-
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
         with tabs[0]:
-            st.subheader("Best Moneyline Picks")
+            st.subheader("Top 5 Moneyline Picks")
             ml = format_display(df, "h2h")
             if ml.empty:
                 st.info("No moneyline data available.")
@@ -156,7 +157,7 @@ if fetch:
                 st.dataframe(ml, use_container_width=True, hide_index=True)
 
         with tabs[1]:
-            st.subheader("Best Totals (O/U) Picks")
+            st.subheader("Top 5 Totals Picks (Over/Under)")
             totals = format_display(df, "totals")
             if totals.empty:
                 st.info("No totals data available.")
@@ -164,7 +165,7 @@ if fetch:
                 st.dataframe(totals, use_container_width=True, hide_index=True)
 
         with tabs[2]:
-            st.subheader("Best Spread Picks")
+            st.subheader("Top 5 Spread Picks")
             spreads = format_display(df, "spreads")
             if spreads.empty:
                 st.info("No spreads data available.")

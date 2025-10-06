@@ -1,7 +1,4 @@
 import os
-import math
-from itertools import combinations
-from typing import List
 import requests
 import pandas as pd
 import numpy as np
@@ -44,24 +41,7 @@ st.caption("Simple. Live odds. Three sections. Units recommended with capped Kel
 st.write("---")
 
 # ----------------------------
-# Odds helper functions
-# ----------------------------
-def american_to_decimal(odds: float) -> float:
-    if odds is None or pd.isna(odds):
-        return np.nan
-    odds = float(odds)
-    return 1 + (odds / 100.0) if odds > 0 else 1 + (100.0 / abs(odds))
-
-def implied_prob_american(odds: float) -> float:
-    if odds is None or pd.isna(odds):
-        return np.nan
-    odds = float(odds)
-    if odds > 0:
-        return 100.0 / (odds + 100.0)
-    return abs(odds) / (abs(odds) + 100.0)
-
-# ----------------------------
-# Fetch Odds API
+# Fetch Odds API (flattened)
 # ----------------------------
 @st.cache_data(ttl=60)
 def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals") -> pd.DataFrame:
@@ -81,7 +61,32 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         st.error(f"Odds API error {r.status_code}: {r.text}")
         return pd.DataFrame()
 
-    return pd.json_normalize(r.json(), sep="_")
+    data = r.json()
+    rows = []
+    for ev in data:
+        event_id = ev.get("id")
+        home = ev.get("home_team")
+        away = ev.get("away_team")
+        start = ev.get("commence_time")
+
+        for book in ev.get("bookmakers", []):
+            book_name = book.get("title")
+            for market in book.get("markets", []):
+                market_key = market.get("key")
+                for outcome in market.get("outcomes", []):
+                    rows.append({
+                        "event_id": event_id,
+                        "commence_time": start,
+                        "home_team": home,
+                        "away_team": away,
+                        "book": book_name,
+                        "market": market_key,         # h2h, totals, spreads
+                        "name": outcome.get("name"),  # Home/Away/Over/Under
+                        "price": outcome.get("price"),
+                        "point": outcome.get("point") # spread or total line if applicable
+                    })
+
+    return pd.DataFrame(rows)
 
 # ----------------------------
 # Sidebar filters
@@ -105,7 +110,7 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Format datetime if exists
+        # Format datetime
         if "commence_time" in df.columns:
             df["commence_time"] = pd.to_datetime(df["commence_time"])
             df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
@@ -113,38 +118,41 @@ if fetch:
         # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-        def safe_filter(df, key, value):
-            """Helper to avoid KeyError if column missing"""
-            if key not in df.columns:
-                return pd.DataFrame()
-            return df[df[key] == value]
-
         # --- Moneylines
         with tabs[0]:
             st.subheader("Moneyline Picks")
-            ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
+            ml = df[df["market"] == "h2h"]
             if ml.empty:
                 st.info("No moneyline data available.")
             else:
-                st.dataframe(ml, use_container_width=True)
+                st.dataframe(
+                    ml[["commence_time","home_team","away_team","book","name","price"]],
+                    use_container_width=True
+                )
 
         # --- Totals
         with tabs[1]:
             st.subheader("Over/Under Picks")
-            totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
+            totals = df[df["market"] == "totals"]
             if totals.empty:
                 st.info("No totals data available.")
             else:
-                st.dataframe(totals, use_container_width=True)
+                st.dataframe(
+                    totals[["commence_time","home_team","away_team","book","name","point","price"]],
+                    use_container_width=True
+                )
 
         # --- Spreads
         with tabs[2]:
             st.subheader("Spread Picks")
-            spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
+            spreads = df[df["market"] == "spreads"]
             if spreads.empty:
                 st.info("No spreads data available.")
             else:
-                st.dataframe(spreads, use_container_width=True)
+                st.dataframe(
+                    spreads[["commence_time","home_team","away_team","book","name","point","price"]],
+                    use_container_width=True
+                )
 
         # --- Raw JSON Flattened
         with tabs[3]:

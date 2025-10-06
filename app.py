@@ -37,11 +37,11 @@ SPORT_OPTIONS = {
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("AI-driven best bets with Kelly staking. Only Top 5 picks per market.")
+st.caption("Simple. Live odds. Three sections. Units recommended with capped Kelly.")
 st.write("---")
 
 # ----------------------------
-# Helper functions
+# Odds helper functions
 # ----------------------------
 def american_to_decimal(odds: float) -> float:
     if odds is None or pd.isna(odds):
@@ -57,59 +57,13 @@ def implied_prob_american(odds: float) -> float:
         return 100.0 / (odds + 100.0)
     return abs(odds) / (abs(odds) + 100.0)
 
-def kelly_fraction(true_p: float, dec_odds: float) -> float:
-    if true_p is None or pd.isna(true_p) or dec_odds is None or pd.isna(dec_odds):
+def kelly_fraction(true_p: float, dec_odds: float, cap: float) -> float:
+    if pd.isna(true_p) or pd.isna(dec_odds):
         return 0.0
-    b = dec_odds - 1.0
-    q = 1.0 - true_p
-    f = (b * true_p - q) / b if b > 0 else 0.0
-    return max(0.0, f)
-
-def edge_from_true_p(dec_odds: float, true_p: float) -> float:
-    if dec_odds is None or pd.isna(dec_odds) or true_p is None or pd.isna(true_p):
-        return np.nan
-    return dec_odds * true_p - 1.0
-
-def clean_and_rank(df: pd.DataFrame, market_type: str, bankroll: float, unit_size: float, kelly_cap: float):
-    if df.empty:
-        return pd.DataFrame()
-
-    df = df[df["market_key"] == market_type].copy()
-    if df.empty:
-        return pd.DataFrame()
-
-    # Convert odds to metrics
-    df["dec_odds"] = df["price"].apply(american_to_decimal)
-    df["implied_prob"] = df["price"].apply(implied_prob_american)
-    df["true_prob"] = df.groupby("id")["implied_prob"].transform(lambda x: x / x.sum())  # remove vig
-    df["edge"] = df.apply(lambda r: edge_from_true_p(r["dec_odds"], r["true_prob"]), axis=1)
-    df["kelly"] = df.apply(lambda r: kelly_fraction(r["true_prob"], r["dec_odds"]), axis=1)
-    df["kelly_capped"] = df["kelly"].clip(lower=0.0, upper=kelly_cap)
-    df["stake_$"] = (df["kelly_capped"] * bankroll).clip(lower=0.0)
-    df["units"] = df["stake_$"] / unit_size
-
-    # Drop duplicates (keep best odds per outcome across books)
-    df = df.sort_values(by="edge", ascending=False)
-    df = df.drop_duplicates(subset=["id", "name"], keep="first")
-
-    # Format display columns
-    df["Edge %"] = (df["edge"] * 100).round(2).astype(str) + "%"
-    df["Implied %"] = (df["implied_prob"] * 100).round(1).astype(str) + "%"
-    df["True %"] = (df["true_prob"] * 100).round(1).astype(str) + "%"
-    df["Units"] = df["units"].round(2)
-    df["Stake ($)"] = df["stake_$"].round(2)
-    df["Odds"] = df["price"].astype(str) + f" / " + df["dec_odds"].round(2).astype(str)
-
-    # Final columns
-    df = df.rename(columns={
-        "commence_time": "Date/Time",
-        "home_team": "Home",
-        "away_team": "Away",
-        "name": "Bet",
-        "book": "Book"
-    })
-
-    return df[["Date/Time", "Home", "Away", "Bet", "Odds", "Book", "Implied %", "True %", "Edge %", "Stake ($)", "Units"]].head(5)
+    b = dec_odds - 1
+    q = 1 - true_p
+    f = (b * true_p - q) / b if b > 0 else 0
+    return max(0, min(f, cap))
 
 # ----------------------------
 # Fetch Odds API
@@ -133,20 +87,30 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         return pd.DataFrame()
 
     rows = []
-    data = r.json()
-    for ev in data:
+    for ev in r.json():
+        home, away = ev.get("home_team"), ev.get("away_team")
         for bk in ev.get("bookmakers", []):
+            book = bk.get("title")
             for mk in bk.get("markets", []):
+                market = mk.get("key")  # h2h, spreads, totals
                 for o in mk.get("outcomes", []):
+                    odds = o.get("price")
+                    line = o.get("point")
+                    dec = american_to_decimal(odds)
+                    true_prob = implied_prob_american(odds)  # market prob
+                    edge = dec * true_prob - 1
+                    kelly = kelly_fraction(true_prob, dec, DEFAULT_KELLY_CAP)
                     rows.append({
-                        "id": ev["id"],
-                        "commence_time": ev["commence_time"],
-                        "home_team": ev["home_team"],
-                        "away_team": ev["away_team"],
-                        "book": bk["title"],
-                        "market_key": mk["key"],  # h2h, totals, spreads
-                        "name": o["name"],
-                        "price": o["price"]
+                        "Matchup": f"{away} @ {home}",
+                        "Market": market,
+                        "Book": book,
+                        "Bet": f"{o['name']} {line if line is not None else ''}".strip(),
+                        "Odds (US)": odds,
+                        "Odds (Dec)": f"{dec:.2f}",
+                        "Implied %": f"{true_prob*100:.1f}%",
+                        "Edge %": edge,
+                        "Kelly %": f"{kelly*100:.1f}%",
+                        "Units": f"{kelly*40:.2f}"  # assume 40u bankroll
                     })
     return pd.DataFrame(rows)
 
@@ -172,41 +136,45 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        df["commence_time"] = pd.to_datetime(df["commence_time"])
-        df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
+        # Sort by best edge
+        df = df.sort_values("Edge %", ascending=False)
 
+        # Banner for Best Pick
+        best = df.iloc[0]
+        st.success(
+            f"🔥 **Best Pick Today:** {best['Bet']} in {best['Matchup']} "
+            f"@ {best['Book']} | Odds: {best['Odds (US)']} "
+            f"| Edge: {best['Edge %']*100:.2f}% | Units: {best['Units']}"
+        )
+
+        # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-        # --- Moneylines
+        def top_table(df, market):
+            subset = df[df["Market"] == market].sort_values("Edge %", ascending=False)
+            subset = subset[subset["Edge %"] > min_edge]
+            return subset.head(5)[[
+                "Matchup", "Book", "Bet", "Odds (US)", "Odds (Dec)",
+                "Implied %", "Edge %", "Kelly %", "Units"
+            ]]
+
         with tabs[0]:
             st.subheader("Top 5 Moneyline Picks")
-            ml = clean_and_rank(df, "h2h", bankroll, unit_size, kelly_cap)
-            if ml.empty:
-                st.info("No moneyline data available.")
-            else:
-                st.dataframe(ml, use_container_width=True)
+            ml = top_table(df, "h2h")
+            st.dataframe(ml, use_container_width=True) if not ml.empty else st.info("No edges found.")
 
-        # --- Totals
         with tabs[1]:
             st.subheader("Top 5 Totals Picks")
-            totals = clean_and_rank(df, "totals", bankroll, unit_size, kelly_cap)
-            if totals.empty:
-                st.info("No totals data available.")
-            else:
-                st.dataframe(totals, use_container_width=True)
+            tot = top_table(df, "totals")
+            st.dataframe(tot, use_container_width=True) if not tot.empty else st.info("No edges found.")
 
-        # --- Spreads
         with tabs[2]:
             st.subheader("Top 5 Spread Picks")
-            spreads = clean_and_rank(df, "spreads", bankroll, unit_size, kelly_cap)
-            if spreads.empty:
-                st.info("No spreads data available.")
-            else:
-                st.dataframe(spreads, use_container_width=True)
+            sp = top_table(df, "spreads")
+            st.dataframe(sp, use_container_width=True) if not sp.empty else st.info("No edges found.")
 
-        # --- Raw Data
         with tabs[3]:
-            st.subheader("Raw Odds Data (debugging)")
+            st.subheader("Raw Odds Data")
             st.dataframe(df.head(50), use_container_width=True)
 
 else:

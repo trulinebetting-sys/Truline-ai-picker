@@ -18,6 +18,11 @@ except ImportError:
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
+DEFAULT_BOOKS = [b.strip() for b in os.getenv(
+    "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
+).split(",") if b.strip()]
+DEFAULT_MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))
+DEFAULT_KELLY_CAP = float(os.getenv("KELLY_CAP", "0.25"))
 
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
@@ -32,7 +37,7 @@ SPORT_OPTIONS = {
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Simple. Live odds. Best single pick per game per market.")
+st.caption("Live odds. Best picks only. Confidence-weighted units.")
 st.write("---")
 
 # ----------------------------
@@ -51,14 +56,6 @@ def implied_prob_american(odds: float) -> float:
     if odds > 0:
         return 100.0 / (odds + 100.0)
     return abs(odds) / (abs(odds) + 100.0)
-
-def kelly_fraction(true_p: float, dec_odds: float) -> float:
-    if pd.isna(true_p) or pd.isna(dec_odds) or dec_odds <= 1.0:
-        return 0.0
-    b = dec_odds - 1
-    q = 1 - true_p
-    f = (b*true_p - q) / b
-    return max(0.0, f)
 
 # ----------------------------
 # Fetch Odds API
@@ -81,28 +78,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         st.error(f"Odds API error {r.status_code}: {r.text}")
         return pd.DataFrame()
 
-    data = r.json()
-    rows = []
-    for ev in data:
-        home = ev.get("home_team")
-        away = ev.get("away_team")
-        commence = ev.get("commence_time")
-        for bk in ev.get("bookmakers", []):
-            book = bk.get("title")
-            for mk in bk.get("markets", []):
-                mkey = mk.get("key")
-                for out in mk.get("outcomes", []):
-                    rows.append({
-                        "commence_time": commence,
-                        "home_team": home,
-                        "away_team": away,
-                        "book": book,
-                        "market": mkey,
-                        "name": out.get("name"),
-                        "price": out.get("price"),
-                        "point": out.get("point")
-                    })
-    return pd.DataFrame(rows)
+    return pd.json_normalize(r.json(), sep="_")
 
 # ----------------------------
 # Sidebar filters
@@ -113,7 +89,8 @@ with st.sidebar:
     regions = st.text_input("Regions", value=DEFAULT_REGIONS)
     bankroll = st.number_input("Bankroll ($)", min_value=100.0, value=1000.0, step=50.0)
     unit_size = st.number_input("Unit size ($)", min_value=1.0, value=25.0, step=1.0)
-    kelly_cap = st.slider("Kelly Cap", 0.0, 1.0, 0.25, 0.05)
+    min_edge = st.slider("Min Edge (%)", 0.0, 10.0, DEFAULT_MIN_EDGE*100, 0.25) / 100.0
+    kelly_cap = st.slider("Kelly Cap", 0.0, 1.0, DEFAULT_KELLY_CAP, 0.05)
     fetch = st.button("Fetch Live Odds")
 
 # ----------------------------
@@ -125,64 +102,80 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Format datetime
+        # Format datetime if exists
         if "commence_time" in df.columns:
             df["commence_time"] = pd.to_datetime(df["commence_time"])
-            df["Date/Time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
-
-        # Build Pick column
-        df["Pick"] = df.apply(lambda r: f"{r['name']} {r['point']}" if pd.notna(r['point']) else r['name'], axis=1)
-
-        # Probabilities + Kelly stake
-        df["Decimal Odds"] = df["price"].apply(american_to_decimal)
-        df["True Prob"] = df["price"].apply(implied_prob_american)
-        df["Kelly"] = df.apply(lambda r: min(kelly_fraction(r["True Prob"], r["Decimal Odds"]), kelly_cap), axis=1)
-        df["Stake ($)"] = (df["Kelly"] * bankroll).round(2)
-        df["Units"] = (df["Stake ($)"] / unit_size).round(2)
-
-        # Group to keep only best pick per game+market
-        df["Matchup"] = df["home_team"] + " vs " + df["away_team"]
-        df_best = df.loc[df.groupby(["Matchup", "market"])["Units"].idxmax()]
+            df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
         # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-        def clean_table(sub):
-            return sub[[
-                "Date/Time", "home_team", "away_team", "book", "Pick", "price", "Stake ($)", "Units"
-            ]].rename(columns={
-                "home_team": "Home",
-                "away_team": "Away",
-                "book": "Sportsbook",
-                "price": "Odds (US)"
-            }).sort_values(by="Units", ascending=False)
+        def process_market(df, market_key, label):
+            if "bookmakers_0_markets_0_key" not in df.columns:
+                return pd.DataFrame()
+
+            market_df = df[df["bookmakers_0_markets_0_key"] == market_key].copy()
+            if market_df.empty:
+                return pd.DataFrame()
+
+            # Basic info
+            market_df["Home"] = market_df.get("home_team", "Unknown")
+            market_df["Away"] = market_df.get("away_team", "Unknown")
+            market_df["Book"] = market_df.get("bookmakers_0_title", "Unknown")
+            market_df["Pick"] = market_df.get("bookmakers_0_markets_0_outcomes_0_name", "")
+
+            # Odds & probabilities
+            market_df["Odds"] = market_df.get("bookmakers_0_markets_0_outcomes_0_price", np.nan)
+            market_df["Decimal Odds"] = market_df["Odds"].apply(american_to_decimal)
+            market_df["Implied Prob"] = market_df["Odds"].apply(implied_prob_american)
+            market_df["True Prob"] = market_df["Implied Prob"]  # simplification
+
+            # Edge
+            market_df["Edge"] = market_df["Decimal Odds"] * market_df["True Prob"] - 1
+
+            # Confidence-weighted Units
+            market_df["Confidence"] = market_df["True Prob"] * (market_df["Edge"] + 1)
+            market_df["Stake ($)"] = (market_df["Confidence"] * bankroll * kelly_cap).round(2)
+            market_df["Units"] = (market_df["Stake ($)"] / unit_size).round(2)
+
+            # Keep only useful columns
+            out = market_df[[
+                "commence_time", "Home", "Away", "Book", "Pick", "Odds",
+                "Decimal Odds", "Implied Prob", "True Prob", "Edge", "Stake ($)", "Units"
+            ]].copy()
+
+            # Drop duplicates → keep best Edge per game
+            out = out.sort_values(by="Edge", ascending=False)
+            out = out.drop_duplicates(subset=["Home", "Away"], keep="first")
+
+            return out.head(5).reset_index(drop=True)
 
         # --- Moneylines
         with tabs[0]:
-            st.subheader("Best Moneyline Pick per Game")
-            ml = df_best[df_best["market"] == "h2h"]
+            st.subheader("Best Moneyline Picks")
+            ml = process_market(df, "h2h", "Moneyline")
             if ml.empty:
                 st.info("No moneyline data available.")
             else:
-                st.dataframe(clean_table(ml), use_container_width=True)
+                st.dataframe(ml, use_container_width=True)
 
         # --- Totals
         with tabs[1]:
-            st.subheader("Best Total (Over/Under) Pick per Game")
-            totals = df_best[df_best["market"] == "totals"]
+            st.subheader("Best Totals Picks")
+            totals = process_market(df, "totals", "Totals")
             if totals.empty:
                 st.info("No totals data available.")
             else:
-                st.dataframe(clean_table(totals), use_container_width=True)
+                st.dataframe(totals, use_container_width=True)
 
         # --- Spreads
         with tabs[2]:
-            st.subheader("Best Spread Pick per Game")
-            spreads = df_best[df_best["market"] == "spreads"]
+            st.subheader("Best Spread Picks")
+            spreads = process_market(df, "spreads", "Spreads")
             if spreads.empty:
                 st.info("No spreads data available.")
             else:
-                st.dataframe(clean_table(spreads), use_container_width=True)
+                st.dataframe(spreads, use_container_width=True)
 
         # --- Raw JSON Flattened
         with tabs[3]:
@@ -191,3 +184,5 @@ if fetch:
 
 else:
     st.info("Set filters in sidebar and click **Fetch Live Odds**.")
+    if not ODDS_API_KEY:
+        st.error("No ODDS_API_KEY detected. Add it to your `.env` or Streamlit **Secrets** (cloud).")

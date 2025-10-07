@@ -18,28 +18,27 @@ except ImportError:
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
+DEFAULT_BOOKS = [b.strip() for b in os.getenv(
+    "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
+).split(",") if b.strip()]
 DEFAULT_MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))
+DEFAULT_KELLY_CAP = float(os.getenv("KELLY_CAP", "0.25"))
 
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
     "NBA": "basketball_nba",
-    "MLB": "baseball_mlb"
+    "MLB": "baseball_mlb",
+    "EPL": "soccer_epl",
+    "La Liga": "soccer_spain_la_liga"
 }
 
 # ----------------------------
-# Load historical data
+# Streamlit page
 # ----------------------------
-def load_historical_data():
-    hist = {}
-    for sport in SPORT_OPTIONS.keys():
-        path = f"data/{sport.lower()}_results.csv"
-        if os.path.exists(path):
-            hist[sport] = pd.read_csv(path)
-        else:
-            hist[sport] = pd.DataFrame()
-    return hist
-
-HIST_DATA = load_historical_data()
+st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
+st.title("TruLine – AI Genius Picker")
+st.caption("Simple. Live odds. Three sections. Units recommended with capped Kelly.")
+st.write("---")
 
 # ----------------------------
 # Odds helper functions
@@ -82,49 +81,55 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return pd.json_normalize(r.json(), sep="_")
 
 # ----------------------------
-# AI Genius Picker Logic
-# ----------------------------
-def attach_ai_confidence(df: pd.DataFrame, sport: str) -> pd.DataFrame:
-    """Combine historical win rates with live implied probabilities for confidence + units."""
-    df = df.copy()
-    if df.empty:
-        df["Confidence"] = np.nan
-        df["Units"] = np.nan
-        return df
-
-    hist = HIST_DATA.get(sport, pd.DataFrame())
-
-    if not hist.empty and "team" in hist.columns and "win" in hist.columns:
-        team_win_rates = hist.groupby("team")["win"].mean().to_dict()
-    else:
-        team_win_rates = {}
-
-    def conf(row):
-        team = row.get("home_team", "")
-        imp_prob = implied_prob_american(row.get("bookmakers_0_markets_0_outcomes_0_price", np.nan))
-        hist_rate = team_win_rates.get(team, 0.5)  # fallback to 50% if no data
-        return 0.5 * imp_prob + 0.5 * hist_rate if not pd.isna(imp_prob) else hist_rate
-
-    df["Confidence"] = df.apply(conf, axis=1)
-    df["Units"] = df["Confidence"].apply(lambda x: round(5 * x, 1) if not pd.isna(x) else np.nan)
-    return df
-
-# ----------------------------
-# Streamlit page
-# ----------------------------
-st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
-st.title("TruLine – AI Genius Picker")
-st.caption("Live odds + historical data → AI Genius Picks with unit size suggestions")
-st.write("---")
-
-# ----------------------------
 # Sidebar filters
 # ----------------------------
 with st.sidebar:
     st.header("Filters")
     sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
     regions = st.text_input("Regions", value=DEFAULT_REGIONS)
+    bankroll = st.number_input("Bankroll ($)", min_value=100.0, value=1000.0, step=50.0)
+    unit_size = st.number_input("Unit size ($)", min_value=1.0, value=25.0, step=1.0)
+    min_edge = st.slider("Min Edge (%)", 0.0, 10.0, DEFAULT_MIN_EDGE*100, 0.25) / 100.0
+    kelly_cap = st.slider("Kelly Cap", 0.0, 1.0, DEFAULT_KELLY_CAP, 0.05)
     fetch = st.button("Fetch Live Odds")
+
+# ----------------------------
+# Helper for safe filtering
+# ----------------------------
+def safe_filter(df, key, value):
+    if key not in df.columns:
+        return pd.DataFrame()
+    return df[df[key] == value]
+
+# ----------------------------
+# Format table
+# ----------------------------
+def format_table(df):
+    cols_to_keep = [
+        "commence_time",
+        "home_team",
+        "away_team",
+        "bookmakers_0_title",
+        "bookmakers_0_markets_0_outcomes_0_name",
+        "bookmakers_0_markets_0_outcomes_0_price"
+    ]
+    available = [c for c in cols_to_keep if c in df.columns]
+    table = df[available].copy()
+
+    if "commence_time" in table.columns:
+        table["commence_time"] = pd.to_datetime(table["commence_time"])
+        table["commence_time"] = table["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
+
+    table.rename(columns={
+        "commence_time": "Date/Time",
+        "home_team": "Home",
+        "away_team": "Away",
+        "bookmakers_0_title": "Sportsbook",
+        "bookmakers_0_markets_0_outcomes_0_name": "Pick",
+        "bookmakers_0_markets_0_outcomes_0_price": "Odds"
+    }, inplace=True)
+
+    return table
 
 # ----------------------------
 # Main content
@@ -135,52 +140,35 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        df = attach_ai_confidence(df, sport_name)
-
-        if "commence_time" in df.columns:
-            df["commence_time"] = pd.to_datetime(df["commence_time"])
-            df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
-
+        # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
-
-        def safe_filter(df, key, value):
-            if key not in df.columns:
-                return pd.DataFrame()
-            return df[df[key] == value]
-
-        def format_table(subdf):
-            if subdf.empty:
-                return subdf
-            return subdf[[
-                "commence_time", "home_team", "away_team",
-                "bookmakers_0_title", "bookmakers_0_markets_0_outcomes_0_name",
-                "bookmakers_0_markets_0_outcomes_0_price", "Confidence", "Units"
-            ]].rename(columns={
-                "commence_time": "Date/Time",
-                "home_team": "Home",
-                "away_team": "Away",
-                "bookmakers_0_title": "Sportsbook",
-                "bookmakers_0_markets_0_outcomes_0_name": "Pick",
-                "bookmakers_0_markets_0_outcomes_0_price": "Odds (US)"
-            }).head(5)
 
         # --- Moneylines
         with tabs[0]:
             st.subheader("Best Moneyline Picks")
             ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
-            st.dataframe(format_table(ml), use_container_width=True) if not ml.empty else st.info("No moneyline data available.")
+            if not ml.empty:
+                st.dataframe(format_table(ml), use_container_width=True)
+            else:
+                st.info("No moneyline data available.")
 
         # --- Totals
         with tabs[1]:
             st.subheader("Best Over/Under Picks")
             totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
-            st.dataframe(format_table(totals), use_container_width=True) if not totals.empty else st.info("No totals data available.")
+            if not totals.empty:
+                st.dataframe(format_table(totals), use_container_width=True)
+            else:
+                st.info("No totals data available.")
 
         # --- Spreads
         with tabs[2]:
             st.subheader("Best Spread Picks")
             spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
-            st.dataframe(format_table(spreads), use_container_width=True) if not spreads.empty else st.info("No spreads data available.")
+            if not spreads.empty:
+                st.dataframe(format_table(spreads), use_container_width=True)
+            else:
+                st.info("No spreads data available.")
 
         # --- Raw Data
         with tabs[3]:

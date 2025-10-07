@@ -4,17 +4,21 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-# Try dotenv
+# ----------------------------
+# Try to load .env (safe import)
+# ----------------------------
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass
+    st.warning("⚠️ dotenv not installed. Using Streamlit secrets instead.")
 
 # ----------------------------
-# Config
+# Setup
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
+DEFAULT_REGIONS = os.getenv("REGIONS", "us")
+
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
     "NBA": "basketball_nba",
@@ -23,25 +27,52 @@ SPORT_OPTIONS = {
     "La Liga": "soccer_spain_la_liga"
 }
 
+# ----------------------------
+# Streamlit page
+# ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
+st.caption("Best AI-backed plays, simplified. One pick per game, top 5 shown.")
+st.write("---")
 
 # ----------------------------
-# Fetch Odds API (raw JSON)
+# Odds helper functions
+# ----------------------------
+def implied_prob_from_american(odds):
+    """Convert American odds to implied probability."""
+    if odds is None or pd.isna(odds):
+        return np.nan
+    odds = float(odds)
+    if odds > 0:
+        return 100 / (odds + 100)
+    else:
+        return abs(odds) / (abs(odds) + 100)
+
+# ----------------------------
+# Fetch Odds API
 # ----------------------------
 @st.cache_data(ttl=60)
-def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals") -> list:
+def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"):
     if not ODDS_API_KEY:
+        st.error("Missing ODDS_API_KEY. Add it to `.env` or Streamlit Secrets.")
         return []
+
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {"apiKey": ODDS_API_KEY, "regions": regions, "markets": markets, "oddsFormat": "american"}
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": regions,
+        "markets": markets,
+        "oddsFormat": "american"
+    }
     r = requests.get(url, params=params, timeout=30)
     if r.status_code != 200:
+        st.error(f"Odds API error {r.status_code}: {r.text}")
         return []
+
     return r.json()
 
 # ----------------------------
-# Clean into table
+# Build clean table
 # ----------------------------
 def build_table(data: list, market_type: str) -> pd.DataFrame:
     rows = []
@@ -55,6 +86,7 @@ def build_table(data: list, market_type: str) -> pd.DataFrame:
                 if mk.get("key") != market_type:
                     continue
                 for o in mk.get("outcomes", []):
+                    odds = o.get("price")
                     rows.append({
                         "Date/Time": commence,
                         "Home": home,
@@ -63,52 +95,66 @@ def build_table(data: list, market_type: str) -> pd.DataFrame:
                         "Market": market_type,
                         "Pick": o.get("name"),
                         "Line": o.get("point"),
-                        "Odds": o.get("price")
+                        "Odds": odds,
+                        "ImpliedProb": implied_prob_from_american(odds)
                     })
+
     if not rows:
         return pd.DataFrame()
+
     df = pd.DataFrame(rows)
-    if not df.empty and "Date/Time" in df.columns:
+
+    # Format datetime
+    if "Date/Time" in df.columns:
         df["Date/Time"] = pd.to_datetime(df["Date/Time"])
         df["Date/Time"] = df["Date/Time"].dt.strftime("%b %d, %I:%M %p ET")
-    return df
+
+    # Deduplicate → keep best pick per game + book
+    df = df.sort_values("ImpliedProb", ascending=False)
+    df = df.groupby(["Home", "Away", "Sportsbook", "Market"], as_index=False).first()
+
+    # Only show top 5
+    df = df.sort_values("ImpliedProb", ascending=False).head(5)
+
+    return df[["Date/Time", "Home", "Away", "Sportsbook", "Pick", "Line", "Odds", "ImpliedProb"]]
 
 # ----------------------------
-# Sidebar
+# Sidebar filters
 # ----------------------------
 with st.sidebar:
+    st.header("Filters")
     sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
-    regions = st.text_input("Regions", value="us")
+    regions = st.text_input("Regions", value=DEFAULT_REGIONS)
     fetch = st.button("Fetch Live Odds")
 
 # ----------------------------
-# Main
+# Main content
 # ----------------------------
+sport_key = SPORT_OPTIONS[sport_name]
 if fetch:
-    raw = fetch_odds(SPORT_OPTIONS[sport_name], regions)
-    if not raw:
-        st.error("No data returned. Check API key or quota.")
+    data = fetch_odds(sport_key=sport_key, regions=regions)
+    if not data:
+        st.warning("No data returned. Try another sport or check API quota.")
     else:
-        tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw JSON"])
+        tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
         with tabs[0]:
-            ml = build_table(raw, "h2h")
-            st.subheader("Moneyline Picks")
-            st.dataframe(ml.head(5) if not ml.empty else pd.DataFrame([{"Info": "No moneyline data"}]))
+            st.subheader("Top 5 Moneyline Picks")
+            ml = build_table(data, "h2h")
+            st.dataframe(ml, use_container_width=True) if not ml.empty else st.info("No moneyline data.")
 
         with tabs[1]:
-            totals = build_table(raw, "totals")
-            st.subheader("Totals (Over/Under)")
-            st.dataframe(totals.head(5) if not totals.empty else pd.DataFrame([{"Info": "No totals data"}]))
+            st.subheader("Top 5 Totals (Over/Under) Picks")
+            totals = build_table(data, "totals")
+            st.dataframe(totals, use_container_width=True) if not totals.empty else st.info("No totals data.")
 
         with tabs[2]:
-            spreads = build_table(raw, "spreads")
-            st.subheader("Spreads (+/-)")
-            st.dataframe(spreads.head(5) if not spreads.empty else pd.DataFrame([{"Info": "No spreads data"}]))
+            st.subheader("Top 5 Spread Picks")
+            spreads = build_table(data, "spreads")
+            st.dataframe(spreads, use_container_width=True) if not spreads.empty else st.info("No spread data.")
 
         with tabs[3]:
-            st.subheader("Raw JSON Data")
-            st.json(raw[:2])  # show first 2 events for debugging
-
+            st.subheader("Raw Odds Data")
+            st.json(data[:1])  # show just 1 raw event for inspection
 else:
-    st.info("Set filters and click **Fetch Live Odds**.")
+    st.info("Set filters in sidebar and click **Fetch Live Odds**.")

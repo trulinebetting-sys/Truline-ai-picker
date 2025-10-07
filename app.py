@@ -5,7 +5,7 @@ import numpy as np
 import streamlit as st
 
 # ----------------------------
-# Setup
+# Try to load .env (safe import)
 # ----------------------------
 try:
     from dotenv import load_dotenv
@@ -13,11 +13,12 @@ try:
 except ImportError:
     st.warning("⚠️ dotenv not installed. Using Streamlit secrets instead.")
 
+# ----------------------------
+# Setup
+# ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
-DEFAULT_BOOKS = [b.strip() for b in os.getenv(
-    "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
-).split(",") if b.strip()]
+DEFAULT_MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))
 
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
@@ -26,15 +27,22 @@ SPORT_OPTIONS = {
 }
 
 # ----------------------------
-# Streamlit Page Config
+# Load historical data
 # ----------------------------
-st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
-st.title("🤖 TruLine – AI Genius Picker")
-st.caption("Combining live odds with historical stats for smarter picks.")
-st.write("---")
+def load_historical_data():
+    hist = {}
+    for sport in SPORT_OPTIONS.keys():
+        path = f"data/{sport.lower()}_results.csv"
+        if os.path.exists(path):
+            hist[sport] = pd.read_csv(path)
+        else:
+            hist[sport] = pd.DataFrame()
+    return hist
+
+HIST_DATA = load_historical_data()
 
 # ----------------------------
-# Helper Functions
+# Odds helper functions
 # ----------------------------
 def american_to_decimal(odds: float) -> float:
     if odds is None or pd.isna(odds):
@@ -50,37 +58,11 @@ def implied_prob_american(odds: float) -> float:
         return 100.0 / (odds + 100.0)
     return abs(odds) / (abs(odds) + 100.0)
 
-@st.cache_data
-def load_historical(sport: str) -> pd.DataFrame:
-    path_map = {
-        "NFL": "data/nfl_results.csv",
-        "NBA": "data/nba_results.csv",
-        "MLB": "data/mlb_results.csv"
-    }
-    path = path_map.get(sport)
-    if not path or not os.path.exists(path):
-        return pd.DataFrame()
-    return pd.read_csv(path, parse_dates=["date"])
-
-def compute_ai_confidence(historical_df, home, away):
-    """Very simple AI model: win % from past games"""
-    if historical_df.empty:
-        return 0.5
-    home_games = historical_df[(historical_df["home_team"] == home) | (historical_df["away_team"] == home)]
-    home_wins = ((home_games["home_team"] == home) & (home_games["home_score"] > home_games["away_score"])) | \
-                ((home_games["away_team"] == home) & (home_games["away_score"] > home_games["home_score"]))
-    home_win_pct = home_wins.mean() if not home_games.empty else 0.5
-
-    away_games = historical_df[(historical_df["home_team"] == away) | (historical_df["away_team"] == away)]
-    away_wins = ((away_games["home_team"] == away) & (away_games["home_score"] > away_games["away_score"])) | \
-                ((away_games["away_team"] == away) & (away_games["away_score"] > away_games["home_score"]))
-    away_win_pct = away_wins.mean() if not away_games.empty else 0.5
-
-    confidence = home_win_pct / (home_win_pct + away_win_pct)
-    return confidence
-
+# ----------------------------
+# Fetch Odds API
+# ----------------------------
 @st.cache_data(ttl=60)
-def fetch_odds(sport_key: str, regions: str, markets: str = "h2h") -> pd.DataFrame:
+def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals") -> pd.DataFrame:
     if not ODDS_API_KEY:
         st.error("Missing ODDS_API_KEY. Add it to `.env` or Streamlit Secrets.")
         return pd.DataFrame()
@@ -100,61 +82,119 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h") -> pd.DataFra
     return pd.json_normalize(r.json(), sep="_")
 
 # ----------------------------
-# Sidebar Filters
+# Streamlit page
+# ----------------------------
+st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
+st.title("TruLine – AI Genius Picker")
+st.caption("Live odds + historical data → AI Genius Picks with unit size suggestions")
+st.write("---")
+
+# ----------------------------
+# Sidebar filters
 # ----------------------------
 with st.sidebar:
     st.header("Filters")
     sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
     regions = st.text_input("Regions", value=DEFAULT_REGIONS)
-    fetch = st.button("Fetch AI Picks")
+    fetch = st.button("Fetch Live Odds")
 
 # ----------------------------
-# Main Content
+# AI Genius Picker Logic
+# ----------------------------
+def attach_ai_confidence(df: pd.DataFrame, sport: str) -> pd.DataFrame:
+    """Combine historical win rates with live implied probabilities for confidence + units."""
+    if df.empty or sport not in HIST_DATA or HIST_DATA[sport].empty:
+        df["Confidence"] = np.nan
+        df["Units"] = np.nan
+        return df
+
+    hist = HIST_DATA[sport]
+
+    # Example: historical win rates by team
+    team_win_rates = hist.groupby("team")["win"].mean().to_dict()
+
+    def conf(row):
+        team = row.get("home_team", "")
+        opp = row.get("away_team", "")
+        imp_prob = implied_prob_american(row.get("bookmakers_0_markets_0_outcomes_0_price", np.nan))
+        hist_rate = team_win_rates.get(team, 0.5)
+        return 0.5 * imp_prob + 0.5 * hist_rate  # blend
+
+    df["Confidence"] = df.apply(conf, axis=1)
+    df["Units"] = df["Confidence"].apply(lambda x: round(5 * x, 1) if not pd.isna(x) else np.nan)
+    return df
+
+# ----------------------------
+# Main content
 # ----------------------------
 sport_key = SPORT_OPTIONS[sport_name]
-
 if fetch:
-    df = fetch_odds(sport_key, regions, "h2h")
+    df = fetch_odds(sport_key=sport_key, regions=regions)
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        hist_df = load_historical(sport_name)
-        rows = []
-        for _, row in df.iterrows():
-            home = row.get("home_team", "Unknown")
-            away = row.get("away_team", "Unknown")
-            commence = row.get("commence_time", "")
+        df = attach_ai_confidence(df, sport_name)
 
-            book = row.get("bookmakers_0_title", "")
-            try:
-                price = row["bookmakers_0_markets_0_outcomes_0_price"]
-                team = row["bookmakers_0_markets_0_outcomes_0_name"]
-            except KeyError:
-                continue
+        # Format datetime if exists
+        if "commence_time" in df.columns:
+            df["commence_time"] = pd.to_datetime(df["commence_time"])
+            df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
-            imp_prob = implied_prob_american(price)
-            ai_conf = compute_ai_confidence(hist_df, home, away)
-            final_conf = round((0.6 * imp_prob + 0.4 * ai_conf) * 100, 1)
+        # Tabs
+        tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-            # Assign units (1–5 based on confidence)
-            units = 1 if final_conf < 55 else 2 if final_conf < 65 else 3 if final_conf < 75 else 4 if final_conf < 85 else 5
+        def safe_filter(df, key, value):
+            if key not in df.columns:
+                return pd.DataFrame()
+            return df[df[key] == value]
 
-            rows.append({
-                "Date/Time": commence,
-                "Home": home,
-                "Away": away,
-                "Sportsbook": book,
-                "Pick": f"{team} ML",
-                "Odds": price,
-                "Implied %": round(imp_prob*100,1),
-                "AI Confidence %": final_conf,
-                "Units": units
-            })
+        def format_table(subdf):
+            if subdf.empty:
+                return subdf
+            return subdf[[
+                "commence_time", "home_team", "away_team",
+                "bookmakers_0_title", "bookmakers_0_markets_0_outcomes_0_name",
+                "bookmakers_0_markets_0_outcomes_0_price", "Confidence", "Units"
+            ]].rename(columns={
+                "commence_time": "Date/Time",
+                "home_team": "Home",
+                "away_team": "Away",
+                "bookmakers_0_title": "Sportsbook",
+                "bookmakers_0_markets_0_outcomes_0_name": "Pick",
+                "bookmakers_0_markets_0_outcomes_0_price": "Odds (US)"
+            }).head(5)
 
-        out = pd.DataFrame(rows)
-        out = out.sort_values(by="AI Confidence %", ascending=False).head(5)
-        st.subheader("Top 5 AI Picks (Moneyline)")
-        st.dataframe(out, use_container_width=True)
+        # --- Moneylines
+        with tabs[0]:
+            st.subheader("Best Moneyline Picks")
+            ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
+            if ml.empty:
+                st.info("No moneyline data available.")
+            else:
+                st.dataframe(format_table(ml), use_container_width=True)
+
+        # --- Totals
+        with tabs[1]:
+            st.subheader("Best Over/Under Picks")
+            totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
+            if totals.empty:
+                st.info("No totals data available.")
+            else:
+                st.dataframe(format_table(totals), use_container_width=True)
+
+        # --- Spreads
+        with tabs[2]:
+            st.subheader("Best Spread Picks")
+            spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
+            if spreads.empty:
+                st.info("No spreads data available.")
+            else:
+                st.dataframe(format_table(spreads), use_container_width=True)
+
+        # --- Raw JSON Flattened
+        with tabs[3]:
+            st.subheader("Raw Odds Data")
+            st.dataframe(df.head(50), use_container_width=True)
 
 else:
-    st.info("Choose filters and click **Fetch AI Picks**.")
+    st.info("Set filters in sidebar and click **Fetch Live Odds**.")

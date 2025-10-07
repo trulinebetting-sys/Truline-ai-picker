@@ -21,8 +21,6 @@ DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 DEFAULT_BOOKS = [b.strip() for b in os.getenv(
     "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
 ).split(",") if b.strip()]
-DEFAULT_MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))
-DEFAULT_KELLY_CAP = float(os.getenv("KELLY_CAP", "0.25"))
 
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
@@ -87,23 +85,22 @@ with st.sidebar:
     st.header("Filters")
     sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
     regions = st.text_input("Regions", value=DEFAULT_REGIONS)
-    bankroll = st.number_input("Bankroll ($)", min_value=100.0, value=1000.0, step=50.0)
-    unit_size = st.number_input("Unit size ($)", min_value=1.0, value=25.0, step=1.0)
-    min_edge = st.slider("Min Edge (%)", 0.0, 10.0, DEFAULT_MIN_EDGE*100, 0.25) / 100.0
-    kelly_cap = st.slider("Kelly Cap", 0.0, 1.0, DEFAULT_KELLY_CAP, 0.05)
     fetch = st.button("Fetch Live Odds")
 
 # ----------------------------
-# Helper for safe filtering
+# Helpers
 # ----------------------------
-def safe_filter(df, key, value):
-    if key not in df.columns:
+def filter_market(df, market_type: str) -> pd.DataFrame:
+    """Find rows where any market key column matches market_type (h2h, totals, spreads)."""
+    market_cols = [c for c in df.columns if "markets" in c and "key" in c]
+    if not market_cols:
         return pd.DataFrame()
-    return df[df[key] == value]
+    results = pd.DataFrame()
+    for col in market_cols:
+        subset = df[df[col] == market_type]
+        results = pd.concat([results, subset])
+    return results
 
-# ----------------------------
-# Format table
-# ----------------------------
 def format_table(df):
     cols_to_keep = [
         "commence_time",
@@ -140,33 +137,32 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
         # --- Moneylines
         with tabs[0]:
             st.subheader("Best Moneyline Picks")
-            ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
+            ml = filter_market(df, "h2h")
             if not ml.empty:
-                st.dataframe(format_table(ml), use_container_width=True)
+                st.dataframe(format_table(ml).head(5), use_container_width=True)
             else:
                 st.info("No moneyline data available.")
 
         # --- Totals
         with tabs[1]:
             st.subheader("Best Over/Under Picks")
-            totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
+            totals = filter_market(df, "totals")
             if not totals.empty:
-                st.dataframe(format_table(totals), use_container_width=True)
+                st.dataframe(format_table(totals).head(5), use_container_width=True)
             else:
                 st.info("No totals data available.")
 
         # --- Spreads
         with tabs[2]:
             st.subheader("Best Spread Picks")
-            spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
+            spreads = filter_market(df, "spreads")
             if not spreads.empty:
-                st.dataframe(format_table(spreads), use_container_width=True)
+                st.dataframe(format_table(spreads).head(5), use_container_width=True)
             else:
                 st.info("No spreads data available.")
 

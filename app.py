@@ -82,6 +82,34 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return pd.json_normalize(r.json(), sep="_")
 
 # ----------------------------
+# AI Genius Picker Logic
+# ----------------------------
+def attach_ai_confidence(df: pd.DataFrame, sport: str) -> pd.DataFrame:
+    """Combine historical win rates with live implied probabilities for confidence + units."""
+    df = df.copy()
+    if df.empty:
+        df["Confidence"] = np.nan
+        df["Units"] = np.nan
+        return df
+
+    hist = HIST_DATA.get(sport, pd.DataFrame())
+
+    if not hist.empty and "team" in hist.columns and "win" in hist.columns:
+        team_win_rates = hist.groupby("team")["win"].mean().to_dict()
+    else:
+        team_win_rates = {}
+
+    def conf(row):
+        team = row.get("home_team", "")
+        imp_prob = implied_prob_american(row.get("bookmakers_0_markets_0_outcomes_0_price", np.nan))
+        hist_rate = team_win_rates.get(team, 0.5)  # fallback to 50% if no data
+        return 0.5 * imp_prob + 0.5 * hist_rate if not pd.isna(imp_prob) else hist_rate
+
+    df["Confidence"] = df.apply(conf, axis=1)
+    df["Units"] = df["Confidence"].apply(lambda x: round(5 * x, 1) if not pd.isna(x) else np.nan)
+    return df
+
+# ----------------------------
 # Streamlit page
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
@@ -99,32 +127,6 @@ with st.sidebar:
     fetch = st.button("Fetch Live Odds")
 
 # ----------------------------
-# AI Genius Picker Logic
-# ----------------------------
-def attach_ai_confidence(df: pd.DataFrame, sport: str) -> pd.DataFrame:
-    """Combine historical win rates with live implied probabilities for confidence + units."""
-    if df.empty or sport not in HIST_DATA or HIST_DATA[sport].empty:
-        df["Confidence"] = np.nan
-        df["Units"] = np.nan
-        return df
-
-    hist = HIST_DATA[sport]
-
-    # Example: historical win rates by team
-    team_win_rates = hist.groupby("team")["win"].mean().to_dict()
-
-    def conf(row):
-        team = row.get("home_team", "")
-        opp = row.get("away_team", "")
-        imp_prob = implied_prob_american(row.get("bookmakers_0_markets_0_outcomes_0_price", np.nan))
-        hist_rate = team_win_rates.get(team, 0.5)
-        return 0.5 * imp_prob + 0.5 * hist_rate  # blend
-
-    df["Confidence"] = df.apply(conf, axis=1)
-    df["Units"] = df["Confidence"].apply(lambda x: round(5 * x, 1) if not pd.isna(x) else np.nan)
-    return df
-
-# ----------------------------
 # Main content
 # ----------------------------
 sport_key = SPORT_OPTIONS[sport_name]
@@ -135,12 +137,10 @@ if fetch:
     else:
         df = attach_ai_confidence(df, sport_name)
 
-        # Format datetime if exists
         if "commence_time" in df.columns:
             df["commence_time"] = pd.to_datetime(df["commence_time"])
             df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
-        # Tabs
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
         def safe_filter(df, key, value):
@@ -168,30 +168,21 @@ if fetch:
         with tabs[0]:
             st.subheader("Best Moneyline Picks")
             ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
-            if ml.empty:
-                st.info("No moneyline data available.")
-            else:
-                st.dataframe(format_table(ml), use_container_width=True)
+            st.dataframe(format_table(ml), use_container_width=True) if not ml.empty else st.info("No moneyline data available.")
 
         # --- Totals
         with tabs[1]:
             st.subheader("Best Over/Under Picks")
             totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
-            if totals.empty:
-                st.info("No totals data available.")
-            else:
-                st.dataframe(format_table(totals), use_container_width=True)
+            st.dataframe(format_table(totals), use_container_width=True) if not totals.empty else st.info("No totals data available.")
 
         # --- Spreads
         with tabs[2]:
             st.subheader("Best Spread Picks")
             spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
-            if spreads.empty:
-                st.info("No spreads data available.")
-            else:
-                st.dataframe(format_table(spreads), use_container_width=True)
+            st.dataframe(format_table(spreads), use_container_width=True) if not spreads.empty else st.info("No spreads data available.")
 
-        # --- Raw JSON Flattened
+        # --- Raw Data
         with tabs[3]:
             st.subheader("Raw Odds Data")
             st.dataframe(df.head(50), use_container_width=True)

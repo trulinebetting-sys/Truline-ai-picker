@@ -4,21 +4,17 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-# ----------------------------
-# Try to load .env (safe import)
-# ----------------------------
+# Try dotenv
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    st.warning("⚠️ dotenv not installed. Using Streamlit secrets instead.")
+    pass
 
 # ----------------------------
-# Setup
+# Config
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
-DEFAULT_REGIONS = os.getenv("REGIONS", "us")
-
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
     "NBA": "basketball_nba",
@@ -27,125 +23,92 @@ SPORT_OPTIONS = {
     "La Liga": "soccer_spain_la_liga"
 }
 
-# ----------------------------
-# Streamlit page
-# ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Simple. Live odds. Three sections.")
-st.write("---")
 
 # ----------------------------
-# Fetch Odds API
+# Fetch Odds API (raw JSON)
 # ----------------------------
 @st.cache_data(ttl=60)
-def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals") -> pd.DataFrame:
+def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals") -> list:
     if not ODDS_API_KEY:
-        st.error("Missing ODDS_API_KEY. Add it to `.env` or Streamlit Secrets.")
-        return pd.DataFrame()
-
+        return []
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "regions": regions,
-        "markets": markets,
-        "oddsFormat": "american"
-    }
+    params = {"apiKey": ODDS_API_KEY, "regions": regions, "markets": markets, "oddsFormat": "american"}
     r = requests.get(url, params=params, timeout=30)
     if r.status_code != 200:
-        st.error(f"Odds API error {r.status_code}: {r.text}")
-        return pd.DataFrame()
-
-    return pd.json_normalize(r.json(), sep="_")
+        return []
+    return r.json()
 
 # ----------------------------
-# Sidebar filters
+# Clean into table
+# ----------------------------
+def build_table(data: list, market_type: str) -> pd.DataFrame:
+    rows = []
+    for ev in data:
+        home = ev.get("home_team")
+        away = ev.get("away_team")
+        commence = ev.get("commence_time")
+        for bk in ev.get("bookmakers", []):
+            book = bk.get("title")
+            for mk in bk.get("markets", []):
+                if mk.get("key") != market_type:
+                    continue
+                for o in mk.get("outcomes", []):
+                    rows.append({
+                        "Date/Time": commence,
+                        "Home": home,
+                        "Away": away,
+                        "Sportsbook": book,
+                        "Market": market_type,
+                        "Pick": o.get("name"),
+                        "Line": o.get("point"),
+                        "Odds": o.get("price")
+                    })
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    if not df.empty and "Date/Time" in df.columns:
+        df["Date/Time"] = pd.to_datetime(df["Date/Time"])
+        df["Date/Time"] = df["Date/Time"].dt.strftime("%b %d, %I:%M %p ET")
+    return df
+
+# ----------------------------
+# Sidebar
 # ----------------------------
 with st.sidebar:
-    st.header("Filters")
     sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
-    regions = st.text_input("Regions", value=DEFAULT_REGIONS)
+    regions = st.text_input("Regions", value="us")
     fetch = st.button("Fetch Live Odds")
 
 # ----------------------------
-# Helpers
+# Main
 # ----------------------------
-def filter_market(df, market_type: str) -> pd.DataFrame:
-    """Search all columns for a given market type (h2h, spreads, totals)."""
-    market_cols = [c for c in df.columns if "market" in c and "key" in c]
-    results = pd.DataFrame()
-    for col in market_cols:
-        subset = df[df[col] == market_type]
-        results = pd.concat([results, subset])
-    return results
-
-def format_table(df):
-    # Try to grab common useful fields
-    cols = []
-    for c in df.columns:
-        if any(k in c for k in ["commence_time", "home_team", "away_team",
-                                "bookmakers_0_title", "outcomes_0_name", "outcomes_0_price"]):
-            cols.append(c)
-
-    table = df[cols].copy()
-
-    if "commence_time" in table.columns:
-        table["commence_time"] = pd.to_datetime(table["commence_time"])
-        table["commence_time"] = table["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
-
-    rename_map = {
-        "commence_time": "Date/Time",
-        "home_team": "Home",
-        "away_team": "Away",
-        "bookmakers_0_title": "Sportsbook",
-    }
-    for c in table.columns:
-        if "outcomes_0_name" in c:
-            rename_map[c] = "Pick"
-        if "outcomes_0_price" in c:
-            rename_map[c] = "Odds"
-
-    table.rename(columns=rename_map, inplace=True)
-    return table
-
-# ----------------------------
-# Main content
-# ----------------------------
-sport_key = SPORT_OPTIONS[sport_name]
 if fetch:
-    df = fetch_odds(sport_key=sport_key, regions=regions)
-    if df.empty:
-        st.warning("No data returned. Try another sport or check API quota.")
+    raw = fetch_odds(SPORT_OPTIONS[sport_name], regions)
+    if not raw:
+        st.error("No data returned. Check API key or quota.")
     else:
-        tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
+        tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw JSON"])
 
         with tabs[0]:
-            st.subheader("Best Moneyline Picks")
-            ml = filter_market(df, "h2h")
-            if not ml.empty:
-                st.dataframe(format_table(ml).head(5), use_container_width=True)
-            else:
-                st.info("No moneyline data available.")
+            ml = build_table(raw, "h2h")
+            st.subheader("Moneyline Picks")
+            st.dataframe(ml.head(5) if not ml.empty else pd.DataFrame([{"Info": "No moneyline data"}]))
 
         with tabs[1]:
-            st.subheader("Best Over/Under Picks")
-            totals = filter_market(df, "totals")
-            if not totals.empty:
-                st.dataframe(format_table(totals).head(5), use_container_width=True)
-            else:
-                st.info("No totals data available.")
+            totals = build_table(raw, "totals")
+            st.subheader("Totals (Over/Under)")
+            st.dataframe(totals.head(5) if not totals.empty else pd.DataFrame([{"Info": "No totals data"}]))
 
         with tabs[2]:
-            st.subheader("Best Spread Picks")
-            spreads = filter_market(df, "spreads")
-            if not spreads.empty:
-                st.dataframe(format_table(spreads).head(5), use_container_width=True)
-            else:
-                st.info("No spreads data available.")
+            spreads = build_table(raw, "spreads")
+            st.subheader("Spreads (+/-)")
+            st.dataframe(spreads.head(5) if not spreads.empty else pd.DataFrame([{"Info": "No spreads data"}]))
 
         with tabs[3]:
-            st.subheader("Raw Odds Data")
-            st.dataframe(df.head(50), use_container_width=True)
+            st.subheader("Raw JSON Data")
+            st.json(raw[:2])  # show first 2 events for debugging
 
 else:
-    st.info("Set filters in sidebar and click **Fetch Live Odds**.")
+    st.info("Set filters and click **Fetch Live Odds**.")

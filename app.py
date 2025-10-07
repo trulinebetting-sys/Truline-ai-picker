@@ -18,9 +18,6 @@ except ImportError:
 # ----------------------------
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
-DEFAULT_BOOKS = [b.strip() for b in os.getenv(
-    "BOOKS", "DraftKings,FanDuel,BetMGM,PointsBet,Caesars,Pinnacle"
-).split(",") if b.strip()]
 
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
@@ -35,25 +32,8 @@ SPORT_OPTIONS = {
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Simple. Live odds. Three sections. Units recommended with capped Kelly.")
+st.caption("Simple. Live odds. Three sections.")
 st.write("---")
-
-# ----------------------------
-# Odds helper functions
-# ----------------------------
-def american_to_decimal(odds: float) -> float:
-    if odds is None or pd.isna(odds):
-        return np.nan
-    odds = float(odds)
-    return 1 + (odds / 100.0) if odds > 0 else 1 + (100.0 / abs(odds))
-
-def implied_prob_american(odds: float) -> float:
-    if odds is None or pd.isna(odds):
-        return np.nan
-    odds = float(odds)
-    if odds > 0:
-        return 100.0 / (odds + 100.0)
-    return abs(odds) / (abs(odds) + 100.0)
 
 # ----------------------------
 # Fetch Odds API
@@ -91,10 +71,8 @@ with st.sidebar:
 # Helpers
 # ----------------------------
 def filter_market(df, market_type: str) -> pd.DataFrame:
-    """Find rows where any market key column matches market_type (h2h, totals, spreads)."""
-    market_cols = [c for c in df.columns if "markets" in c and "key" in c]
-    if not market_cols:
-        return pd.DataFrame()
+    """Search all columns for a given market type (h2h, spreads, totals)."""
+    market_cols = [c for c in df.columns if "market" in c and "key" in c]
     results = pd.DataFrame()
     for col in market_cols:
         subset = df[df[col] == market_type]
@@ -102,30 +80,32 @@ def filter_market(df, market_type: str) -> pd.DataFrame:
     return results
 
 def format_table(df):
-    cols_to_keep = [
-        "commence_time",
-        "home_team",
-        "away_team",
-        "bookmakers_0_title",
-        "bookmakers_0_markets_0_outcomes_0_name",
-        "bookmakers_0_markets_0_outcomes_0_price"
-    ]
-    available = [c for c in cols_to_keep if c in df.columns]
-    table = df[available].copy()
+    # Try to grab common useful fields
+    cols = []
+    for c in df.columns:
+        if any(k in c for k in ["commence_time", "home_team", "away_team",
+                                "bookmakers_0_title", "outcomes_0_name", "outcomes_0_price"]):
+            cols.append(c)
+
+    table = df[cols].copy()
 
     if "commence_time" in table.columns:
         table["commence_time"] = pd.to_datetime(table["commence_time"])
         table["commence_time"] = table["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
 
-    table.rename(columns={
+    rename_map = {
         "commence_time": "Date/Time",
         "home_team": "Home",
         "away_team": "Away",
         "bookmakers_0_title": "Sportsbook",
-        "bookmakers_0_markets_0_outcomes_0_name": "Pick",
-        "bookmakers_0_markets_0_outcomes_0_price": "Odds"
-    }, inplace=True)
+    }
+    for c in table.columns:
+        if "outcomes_0_name" in c:
+            rename_map[c] = "Pick"
+        if "outcomes_0_price" in c:
+            rename_map[c] = "Odds"
 
+    table.rename(columns=rename_map, inplace=True)
     return table
 
 # ----------------------------
@@ -139,7 +119,6 @@ if fetch:
     else:
         tabs = st.tabs(["Moneylines", "Totals", "Spreads", "Raw Data"])
 
-        # --- Moneylines
         with tabs[0]:
             st.subheader("Best Moneyline Picks")
             ml = filter_market(df, "h2h")
@@ -148,7 +127,6 @@ if fetch:
             else:
                 st.info("No moneyline data available.")
 
-        # --- Totals
         with tabs[1]:
             st.subheader("Best Over/Under Picks")
             totals = filter_market(df, "totals")
@@ -157,7 +135,6 @@ if fetch:
             else:
                 st.info("No totals data available.")
 
-        # --- Spreads
         with tabs[2]:
             st.subheader("Best Spread Picks")
             spreads = filter_market(df, "spreads")
@@ -166,7 +143,6 @@ if fetch:
             else:
                 st.info("No spreads data available.")
 
-        # --- Raw Data
         with tabs[3]:
             st.subheader("Raw Odds Data")
             st.dataframe(df.head(50), use_container_width=True)

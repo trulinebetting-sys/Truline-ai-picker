@@ -1,6 +1,4 @@
-date,home_team,away_team,home_score,away_score
-2023-07-01,New York Yankees,Toronto Blue Jays,5,3
-2023-07-03,Boston Red Sox,Tampa Bay Rays,3,6
-2023-07-07,Los Angeles Dodgers,San Francisco Giants,7,4
-2023-07-10,Chicago Cubs,Milwaukee Brewers,6,2
-2023-07-15,Atlanta Braves,New York Mets,4,8
+date,home_team,away_team,winner,total_points,spread_cover
+2024-07-01,Yankees,Red Sox,Yankees,9,home
+2024-07-02,Dodgers,Mets,Dodgers,6,home
+2024-07-03,Cubs,Cardinals,Cardinals,10,away

@@ -1,7 +1,4 @@
-date,home_team,away_team,home_score,away_score
-2023-09-10,Kansas City Chiefs,Detroit Lions,20,21
-2023-09-17,Buffalo Bills,Miami Dolphins,28,24
-2023-09-24,San Francisco 49ers,New York Giants,31,17
-2023-10-01,Dallas Cowboys,Philadelphia Eagles,24,30
-2023-10-08,Miami Dolphins,New England Patriots,34,27
-
+date,home_team,away_team,winner,total_points,spread_cover
+2024-09-01,Chiefs,Ravens,Chiefs,55,home
+2024-09-02,Bills,Jets,Jets,41,away
+2024-09-03,Cowboys,Eagles,Eagles,48,away

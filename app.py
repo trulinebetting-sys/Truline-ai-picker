@@ -57,7 +57,6 @@ def implied_prob_american(odds: Optional[float]) -> float:
     return 100.0 / (o + 100.0) if o > 0 else abs(o) / (abs(o) + 100.0)
 
 def assign_units(conf: float, hist_boost: float = 0.0) -> float:
-    """Units scale with both live confidence and historical win % boost."""
     if pd.isna(conf):
         return 0.5
     combined = conf + hist_boost
@@ -67,7 +66,7 @@ def fmt_pct(x: float) -> str:
     return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
 
 # ─────────────────────────────────────────────
-# Odds API fetch (live data)
+# Odds API fetch
 # ─────────────────────────────────────────────
 def _odds_get(url: str, params: Dict[str, Any]) -> Optional[Any]:
     if not ODDS_API_KEY:
@@ -131,20 +130,27 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return df
 
 # ─────────────────────────────────────────────
-# API-Sports fetch (historical context, optional)
+# API-Sports fetch (historical)
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def fetch_historical(sport: str = "nfl") -> pd.DataFrame:
+def fetch_historical(sport: str) -> pd.DataFrame:
     if not APISPORTS_KEY:
         return pd.DataFrame()
 
     headers = {"x-apisports-key": APISPORTS_KEY}
 
-    if sport.lower() == "nfl":
-        url = "https://v1.american-football.api-sports.io/games?league=1&season=2023"
-    elif sport.lower() == "nba":
-        url = "https://v1.basketball.api-sports.io/games?league=12&season=2023"
-    else:
+    # Map sports to endpoints
+    sport_urls = {
+        "nfl": "https://v1.american-football.api-sports.io/games?league=1&season=2023",
+        "nba": "https://v1.basketball.api-sports.io/games?league=12&season=2023",
+        "mlb": "https://v1.baseball.api-sports.io/games?league=1&season=2023",
+        "ncaaf": "https://v1.american-football.api-sports.io/games?league=2&season=2023",
+        "ncaab": "https://v1.basketball.api-sports.io/games?league=7&season=2023",
+        "soccer": "https://v3.football.api-sports.io/fixtures?season=2023&league=39"  # EPL as base
+    }
+
+    url = sport_urls.get(sport.lower())
+    if not url:
         return pd.DataFrame()
 
     r = requests.get(url, headers=headers, timeout=30)
@@ -156,7 +162,7 @@ def fetch_historical(sport: str = "nfl") -> pd.DataFrame:
     for g in data:
         home = g.get("teams", {}).get("home", {}).get("name", "Unknown")
         away = g.get("teams", {}).get("away", {}).get("name", "Unknown")
-        winner = g.get("scores", {}).get("winner", {}).get("name", None)
+        winner = g.get("teams", {}).get("winner", {}).get("name", None)
         rows.append({
             "Date": g.get("date"),
             "Home": home,
@@ -175,12 +181,10 @@ def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10, hist: pd.
 
     sub["rank"] = sub.groupby("event_id")["conf_market"].rank(method="first", ascending=False)
     sub = sub[sub["rank"] == 1].copy()
-    sub = sub.sort_values("commence_time", ascending=True)  # most recent first
-    sub = sub.head(top_n)
+    sub = sub.sort_values("commence_time", ascending=True).head(top_n)
 
     sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
 
-    # Historical boost
     win_rates = hist["Winner"].value_counts(normalize=True).to_dict() if not hist.empty else {}
     def hist_boost(row):
         for t in [row["home_team"], row["away_team"]]:
@@ -210,8 +214,7 @@ def ai_genius_top(df: pd.DataFrame, hist: pd.DataFrame, top_n: int = 10) -> pd.D
             frames.append(t)
     if not frames:
         return pd.DataFrame()
-    allp = pd.concat(frames, ignore_index=True)
-    return allp.sort_values("Date/Time", ascending=True).head(top_n).reset_index(drop=True)
+    return pd.concat(frames, ignore_index=True).sort_values("Date/Time", ascending=True).head(top_n).reset_index(drop=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -233,33 +236,38 @@ if fetch:
     if raw.empty:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
+        # historical mapping
         hist = pd.DataFrame()
         if "NFL" in sport_name.upper():
             hist = fetch_historical("nfl")
         elif "NBA" in sport_name.upper():
             hist = fetch_historical("nba")
+        elif "MLB" in sport_name.upper():
+            hist = fetch_historical("mlb")
+        elif "NCAAF" in sport_name.upper():
+            hist = fetch_historical("ncaaf")
+        elif "NCAAB" in sport_name.upper():
+            hist = fetch_historical("ncaab")
+        elif "SOCCER" in sport_name.upper():
+            hist = fetch_historical("soccer")
 
         tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data"])
 
         with tabs[0]:
             st.subheader("AI Genius — Top Picks (Live + Historical)")
-            board = ai_genius_top(raw, hist, top_n)
-            st.dataframe(board, use_container_width=True, hide_index=True)
+            st.dataframe(ai_genius_top(raw, hist, top_n), use_container_width=True, hide_index=True)
 
         with tabs[1]:
-            t = best_per_event(raw, "h2h", top_n, hist)
             st.subheader("Best Moneyline per Game")
-            st.dataframe(t, use_container_width=True, hide_index=True)
+            st.dataframe(best_per_event(raw, "h2h", top_n, hist), use_container_width=True, hide_index=True)
 
         with tabs[2]:
-            t = best_per_event(raw, "totals", top_n, hist)
             st.subheader("Best Totals per Game")
-            st.dataframe(t, use_container_width=True, hide_index=True)
+            st.dataframe(best_per_event(raw, "totals", top_n, hist), use_container_width=True, hide_index=True)
 
         with tabs[3]:
-            t = best_per_event(raw, "spreads", top_n, hist)
             st.subheader("Best Spreads per Game")
-            st.dataframe(t, use_container_width=True, hide_index=True)
+            st.dataframe(best_per_event(raw, "spreads", top_n, hist), use_container_width=True, hide_index=True)
 
         with tabs[4]:
             st.subheader("Raw Data")

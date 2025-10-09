@@ -43,7 +43,7 @@ SPORT_OPTIONS = {
 # ----------------------------
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Live odds with AI-style filtering. Units recommended based on confidence.")
+st.caption("Live odds + historical data + AI-style picks.")
 st.write("---")
 
 # ----------------------------
@@ -74,7 +74,6 @@ def assign_units(confidence: float) -> float:
 # ----------------------------
 @st.cache_data(ttl=60)
 def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals") -> pd.DataFrame:
-    """Fetch odds for a given sport."""
     if not ODDS_API_KEY:
         st.error("Missing ODDS_API_KEY. Add it to `.env` or Streamlit Secrets.")
         return pd.DataFrame()
@@ -94,6 +93,32 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return pd.json_normalize(r.json(), sep="_")
 
 # ----------------------------
+# Historical data (CSV placeholders)
+# ----------------------------
+def load_historical(sport_name: str) -> pd.DataFrame:
+    """Load placeholder historical data for each sport."""
+    file_map = {
+        "NFL": "data/nfl_history.csv",
+        "NBA": "data/nba_history.csv",
+        "MLB": "data/mlb_history.csv",
+    }
+    if sport_name in file_map and os.path.exists(file_map[sport_name]):
+        return pd.read_csv(file_map[sport_name])
+    return pd.DataFrame()
+
+def combine_with_history(df: pd.DataFrame, sport_name: str) -> pd.DataFrame:
+    """Add historical win rates to confidence."""
+    hist = load_historical(sport_name)
+    if hist.empty or df.empty:
+        return df
+    if "home_team" in df.columns and "team" in hist.columns:
+        win_rates = hist.groupby("team")["win"].mean().to_dict()
+        df["home_win_rate"] = df["home_team"].map(win_rates)
+        df["away_win_rate"] = df["away_team"].map(win_rates)
+        df["confidence"] = df["home_win_rate"].fillna(0.5) * 0.5 + df.get("confidence", 0.5) * 0.5
+    return df
+
+# ----------------------------
 # Sidebar filters
 # ----------------------------
 with st.sidebar:
@@ -108,8 +133,7 @@ with st.sidebar:
 sport_key = SPORT_OPTIONS[sport_name]
 
 if fetch:
-    if isinstance(sport_key, list):
-        # Soccer case: fetch multiple leagues
+    if isinstance(sport_key, list):  # Soccer combined
         df_list = [fetch_odds(sk, regions) for sk in sport_key]
         df = pd.concat(df_list, ignore_index=True)
     else:
@@ -118,16 +142,17 @@ if fetch:
     if df.empty:
         st.warning("No data returned. Try another sport or check API quota.")
     else:
-        # Format datetime if exists
         if "commence_time" in df.columns:
             df["commence_time"] = pd.to_datetime(df["commence_time"])
             df["commence_time"] = df["commence_time"].dt.strftime("%b %d, %I:%M %p ET")
+
+        # Merge historical stats
+        df = combine_with_history(df, sport_name)
 
         # Tabs
         tabs = st.tabs(["AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data"])
 
         def safe_filter(df, key, value):
-            """Helper to avoid KeyError if column missing"""
             if key not in df.columns:
                 return pd.DataFrame()
             return df[df[key] == value]
@@ -136,7 +161,6 @@ if fetch:
         with tabs[0]:
             st.subheader("🤖 AI Genius Top Picks")
 
-            # Combine all markets (moneyline, spreads, totals)
             picks = []
             for market in ["h2h", "totals", "spreads"]:
                 sub = safe_filter(df, "bookmakers_0_markets_0_key", market)
@@ -149,25 +173,15 @@ if fetch:
 
             if picks:
                 all_picks = pd.concat(picks, ignore_index=True)
-
-                # Deduplicate by matchup + bet type
                 if "home_team" in all_picks.columns and "away_team" in all_picks.columns:
                     all_picks["Matchup"] = all_picks["home_team"] + " vs " + all_picks["away_team"]
-
                 all_picks = all_picks.drop_duplicates(subset=["Matchup", "Bet Type"])
-
-                # Sort by confidence and show top 10
                 best = all_picks.sort_values(by="confidence", ascending=False).head(10)
 
                 display_cols = [
-                    "commence_time",
-                    "Matchup",
-                    "bookmakers_0_title",
-                    "Bet Type",
-                    "bookmakers_0_markets_0_outcomes_0_name",
-                    "bookmakers_0_markets_0_outcomes_0_price",
-                    "confidence",
-                    "Units"
+                    "commence_time", "Matchup", "bookmakers_0_title",
+                    "Bet Type", "bookmakers_0_markets_0_outcomes_0_name",
+                    "bookmakers_0_markets_0_outcomes_0_price", "confidence", "Units"
                 ]
                 best = best[display_cols].rename(columns={
                     "commence_time": "Date/Time",
@@ -177,12 +191,11 @@ if fetch:
                     "confidence": "Confidence"
                 })
                 best["Confidence"] = best["Confidence"].apply(lambda x: f"{100*x:.1f}%" if not pd.isna(x) else "")
-
                 st.dataframe(best, use_container_width=True, hide_index=True)
             else:
                 st.info("No AI Genius picks available.")
 
-        # --- Moneylines
+        # --- Moneylines ---
         with tabs[1]:
             st.subheader("Moneyline Picks")
             ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
@@ -191,16 +204,16 @@ if fetch:
             else:
                 st.dataframe(ml.head(10), use_container_width=True)
 
-        # --- Totals
+        # --- Totals ---
         with tabs[2]:
-            st.subheader("Over/Under Picks")
+            st.subheader("Totals Picks")
             totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
             if totals.empty:
                 st.info("No totals data available.")
             else:
                 st.dataframe(totals.head(10), use_container_width=True)
 
-        # --- Spreads
+        # --- Spreads ---
         with tabs[3]:
             st.subheader("Spread Picks")
             spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
@@ -209,7 +222,7 @@ if fetch:
             else:
                 st.dataframe(spreads.head(10), use_container_width=True)
 
-        # --- Raw JSON Flattened
+        # --- Raw JSON Flattened ---
         with tabs[4]:
             st.subheader("Raw Odds Data")
             st.dataframe(df.head(50), use_container_width=True)

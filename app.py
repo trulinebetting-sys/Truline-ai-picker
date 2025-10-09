@@ -15,6 +15,7 @@ except Exception:
     pass
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
+APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
 SOCCER_KEYS = [
@@ -37,7 +38,7 @@ SPORT_OPTIONS = {
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Live odds + (optional) recent form + AI-style ranking. No duplicates per game.")
+st.caption("Live odds + historical context + AI-style ranking. No duplicates per game.")
 st.divider()
 
 # ─────────────────────────────────────────────
@@ -64,7 +65,7 @@ def fmt_pct(x: float) -> str:
     return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
 
 # ─────────────────────────────────────────────
-# Odds API fetch
+# Odds API fetch (live data)
 # ─────────────────────────────────────────────
 def _odds_get(url: str, params: Dict[str, Any]) -> Optional[Any]:
     if not ODDS_API_KEY:
@@ -121,12 +122,46 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
 
     if not df.empty and "commence_time" in df.columns:
         df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
-        # Fix tz issue: if tz-naive → localize, else → convert
         if pd.api.types.is_datetime64tz_dtype(df["commence_time"]):
             df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
         else:
             df["Date/Time"] = df["commence_time"].dt.tz_localize("UTC").dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
     return df
+
+# ─────────────────────────────────────────────
+# API-Sports fetch (historical context)
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def fetch_historical(sport: str = "nfl") -> pd.DataFrame:
+    if not APISPORTS_KEY:
+        return pd.DataFrame()
+
+    headers = {"x-apisports-key": APISPORTS_KEY}
+
+    if sport.lower() == "nfl":
+        url = "https://v1.american-football.api-sports.io/games?league=1&season=2023"
+    elif sport.lower() == "nba":
+        url = "https://v1.basketball.api-sports.io/games?league=12&season=2023"
+    else:
+        return pd.DataFrame()
+
+    r = requests.get(url, headers=headers, timeout=30)
+    if r.status_code != 200:
+        return pd.DataFrame()
+
+    data = r.json().get("response", [])
+    rows = []
+    for g in data:
+        home = g.get("teams", {}).get("home", {}).get("name", "Unknown")
+        away = g.get("teams", {}).get("away", {}).get("name", "Unknown")
+        winner = g.get("scores", {}).get("winner", {}).get("name", None)
+        rows.append({
+            "Date": g.get("date"),
+            "Home": home,
+            "Away": away,
+            "Winner": winner
+        })
+    return pd.DataFrame(rows)
 
 # ─────────────────────────────────────────────
 # Deduplicate best picks
@@ -154,7 +189,7 @@ def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.Dat
     out["Units"] = sub["conf_market"].apply(assign_units)
     return out.reset_index(drop=True)
 
-def ai_genius_top(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+def ai_genius_top(df: pd.DataFrame, hist: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     frames = []
     for m in ["h2h", "totals", "spreads"]:
         t = best_per_event(df, m, top_n)
@@ -163,11 +198,22 @@ def ai_genius_top(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
             frames.append(t)
     if not frames:
         return pd.DataFrame()
+
     allp = pd.concat(frames, ignore_index=True)
-    tmp = allp.copy()
-    tmp["_conf"] = tmp["Confidence"].str.replace("%", "", regex=False).astype(float)
-    tmp = tmp.sort_values("_conf", ascending=False).drop(columns=["_conf"])
-    return tmp.head(top_n).reset_index(drop=True)
+    allp["_conf"] = allp["Confidence"].str.replace("%", "", regex=False).astype(float)
+
+    # Historical adjustment: bump confidence if team has high historical win rate
+    if not hist.empty:
+        win_rates = hist["Winner"].value_counts(normalize=True).to_dict()
+        def adjust(row):
+            for team in [row["Matchup"].split(" vs ")[0], row["Matchup"].split(" vs ")[1]]:
+                if team in win_rates:
+                    return row["_conf"] + (win_rates[team] * 10)  # bump by win rate %
+            return row["_conf"]
+        allp["_conf"] = allp.apply(adjust, axis=1)
+
+    allp = allp.sort_values("_conf", ascending=False).drop(columns=["_conf"])
+    return allp.head(top_n).reset_index(drop=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -189,11 +235,18 @@ if fetch:
     if raw.empty:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
+        # Fetch historical if NFL or NBA
+        hist = pd.DataFrame()
+        if "NFL" in sport_name.upper():
+            hist = fetch_historical("nfl")
+        elif "NBA" in sport_name.upper():
+            hist = fetch_historical("nba")
+
         tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data"])
 
         with tabs[0]:
-            st.subheader("AI Genius — Top Picks")
-            board = ai_genius_top(raw, top_n)
+            st.subheader("AI Genius — Top Picks (Live + Historical)")
+            board = ai_genius_top(raw, hist, top_n)
             st.dataframe(board, use_container_width=True, hide_index=True)
 
         with tabs[1]:

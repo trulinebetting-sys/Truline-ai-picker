@@ -59,6 +59,12 @@ def clean_datetime(x):
     except:
         return x
 
+def safe_filter(df, column, value):
+    """Avoids KeyError when column isn't present"""
+    if column not in df.columns:
+        return pd.DataFrame()
+    return df[df[column] == value]
+
 # ----------------------------
 # API Calls
 # ----------------------------
@@ -139,7 +145,8 @@ if fetch:
 
         # --- Moneyline
         with tabs[0]:
-            ml = df[df.get("bookmakers_0_markets_0_key") == "h2h"]
+            st.subheader("Moneyline Picks")
+            ml = safe_filter(df, "bookmakers_0_markets_0_key", "h2h")
             if ml.empty:
                 st.info("No moneyline data available.")
             else:
@@ -147,7 +154,8 @@ if fetch:
 
         # --- Totals
         with tabs[1]:
-            totals = df[df.get("bookmakers_0_markets_0_key") == "totals"]
+            st.subheader("Over/Under Picks")
+            totals = safe_filter(df, "bookmakers_0_markets_0_key", "totals")
             if totals.empty:
                 st.info("No totals available.")
             else:
@@ -155,7 +163,8 @@ if fetch:
 
         # --- Spreads
         with tabs[2]:
-            spreads = df[df.get("bookmakers_0_markets_0_key") == "spreads"]
+            st.subheader("Spread Picks")
+            spreads = safe_filter(df, "bookmakers_0_markets_0_key", "spreads")
             if spreads.empty:
                 st.info("No spreads available.")
             else:
@@ -168,7 +177,6 @@ if fetch:
             if hist.empty:
                 st.warning("No historical data pulled yet.")
             else:
-                # Example "confidence" from % of past wins
                 win_rates = hist["Winner"].value_counts(normalize=True).to_dict()
                 picks = []
                 for team, rate in win_rates.items():
@@ -178,6 +186,7 @@ if fetch:
 
         # --- Raw
         with tabs[4]:
+            st.subheader("Raw API Data")
             st.dataframe(df.head(50), use_container_width=True)
 
 else:

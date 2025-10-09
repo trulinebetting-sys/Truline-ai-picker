@@ -3,7 +3,6 @@ import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
-from datetime import datetime
 
 # ----------------------------
 # Load keys safely
@@ -22,7 +21,9 @@ APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 # ----------------------------
 SPORT_OPTIONS = {
     "NFL": "americanfootball_nfl",
+    "College Football": "americanfootball_ncaaf",
     "NBA": "basketball_nba",
+    "College Basketball": "basketball_ncaab",
     "MLB": "baseball_mlb",
     "Soccer (Top Leagues)": [
         "soccer_epl", "soccer_spain_la_liga",
@@ -42,17 +43,6 @@ st.write("---")
 # ----------------------------
 # Helper functions
 # ----------------------------
-def american_to_decimal(odds):
-    if odds is None or pd.isna(odds):
-        return np.nan
-    odds = float(odds)
-    return 1 + (odds / 100.0) if odds > 0 else 1 + (100.0 / abs(odds))
-
-def implied_prob(odds):
-    if odds > 0:
-        return 100 / (odds + 100)
-    return abs(odds) / (abs(odds) + 100)
-
 def clean_datetime(x):
     try:
         return pd.to_datetime(x).strftime("%b %d, %I:%M %p")
@@ -60,7 +50,6 @@ def clean_datetime(x):
         return x
 
 def safe_filter(df, column, value):
-    """Avoids KeyError when column isn't present"""
     if column not in df.columns:
         return pd.DataFrame()
     return df[df[column] == value]
@@ -82,22 +71,23 @@ def fetch_live_odds(sport_key, regions="us", markets="h2h,spreads,totals"):
 
 @st.cache_data(ttl=3600)
 def fetch_historical_data(sport="nfl"):
-    """Example API-Sports call (can expand by sport)"""
     if not APISPORTS_KEY:
         return pd.DataFrame()
 
     headers = {"x-apisports-key": APISPORTS_KEY}
-    url = f"https://v1.american-football.api-sports.io/games?league=1&season=2023" if sport=="nfl" else \
-          f"https://v1.basketball.api-sports.io/games?league=12&season=2023"
+
+    if sport == "nfl":
+        url = "https://v1.american-football.api-sports.io/games?league=1&season=2023"
+    elif sport == "nba":
+        url = "https://v1.basketball.api-sports.io/games?league=12&season=2023"
+    else:
+        return pd.DataFrame()
 
     r = requests.get(url, headers=headers, timeout=30)
     if r.status_code != 200:
         return pd.DataFrame()
 
     data = r.json().get("response", [])
-    if not data:
-        return pd.DataFrame()
-
     rows = []
     for g in data[:50]:
         home = g.get("teams", {}).get("home", {}).get("name", "Unknown")
@@ -122,6 +112,7 @@ with st.sidebar:
 # Main logic
 # ----------------------------
 if fetch:
+    # Soccer multi-league
     if sport_name == "Soccer (Top Leagues)":
         dfs = []
         for league in SPORT_OPTIONS[sport_name]:
@@ -136,7 +127,6 @@ if fetch:
     if df.empty:
         st.warning("No live odds returned. Check API quota or sport.")
     else:
-        # Format
         if "commence_time" in df.columns:
             df["Date/Time"] = df["commence_time"].apply(clean_datetime)
 

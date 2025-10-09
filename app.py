@@ -56,10 +56,12 @@ def implied_prob_american(odds: Optional[float]) -> float:
     o = float(odds)
     return 100.0 / (o + 100.0) if o > 0 else abs(o) / (abs(o) + 100.0)
 
-def assign_units(conf: float) -> float:
+def assign_units(conf: float, hist_boost: float = 0.0) -> float:
+    """Units scale with both live confidence and historical win % boost."""
     if pd.isna(conf):
         return 0.5
-    return round(0.5 + 4.5 * max(0.0, min(1.0, conf)), 1)
+    combined = conf + hist_boost
+    return round(0.5 + 4.5 * max(0.0, min(1.0, combined)), 1)
 
 def fmt_pct(x: float) -> str:
     return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
@@ -129,7 +131,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return df
 
 # ─────────────────────────────────────────────
-# API-Sports fetch (historical context)
+# API-Sports fetch (historical context, optional)
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def fetch_historical(sport: str = "nfl") -> pd.DataFrame:
@@ -166,16 +168,26 @@ def fetch_historical(sport: str = "nfl") -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # Deduplicate best picks
 # ─────────────────────────────────────────────
-def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.DataFrame:
+def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10, hist: pd.DataFrame = pd.DataFrame()) -> pd.DataFrame:
     sub = df[df["market"] == market_key].copy()
     if sub.empty:
         return pd.DataFrame()
 
     sub["rank"] = sub.groupby("event_id")["conf_market"].rank(method="first", ascending=False)
     sub = sub[sub["rank"] == 1].copy()
-    sub = sub.sort_values("conf_market", ascending=False).head(top_n)
+    sub = sub.sort_values("commence_time", ascending=True)  # most recent first
+    sub = sub.head(top_n)
 
     sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
+
+    # Historical boost
+    win_rates = hist["Winner"].value_counts(normalize=True).to_dict() if not hist.empty else {}
+    def hist_boost(row):
+        for t in [row["home_team"], row["away_team"]]:
+            if t in win_rates:
+                return win_rates[t]
+        return 0.0
+
     out = sub[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
     out = out.rename(columns={
         "book": "Sportsbook",
@@ -186,34 +198,20 @@ def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.Dat
         "conf_market": "Confidence"
     })
     out["Confidence"] = out["Confidence"].apply(fmt_pct)
-    out["Units"] = sub["conf_market"].apply(assign_units)
+    out["Units"] = sub.apply(lambda r: assign_units(r["conf_market"], hist_boost(r)), axis=1)
     return out.reset_index(drop=True)
 
 def ai_genius_top(df: pd.DataFrame, hist: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     frames = []
     for m in ["h2h", "totals", "spreads"]:
-        t = best_per_event(df, m, top_n)
+        t = best_per_event(df, m, top_n, hist)
         if not t.empty:
             t["Market"] = m
             frames.append(t)
     if not frames:
         return pd.DataFrame()
-
     allp = pd.concat(frames, ignore_index=True)
-    allp["_conf"] = allp["Confidence"].str.replace("%", "", regex=False).astype(float)
-
-    # Historical adjustment: bump confidence if team has high historical win rate
-    if not hist.empty:
-        win_rates = hist["Winner"].value_counts(normalize=True).to_dict()
-        def adjust(row):
-            for team in [row["Matchup"].split(" vs ")[0], row["Matchup"].split(" vs ")[1]]:
-                if team in win_rates:
-                    return row["_conf"] + (win_rates[team] * 10)  # bump by win rate %
-            return row["_conf"]
-        allp["_conf"] = allp.apply(adjust, axis=1)
-
-    allp = allp.sort_values("_conf", ascending=False).drop(columns=["_conf"])
-    return allp.head(top_n).reset_index(drop=True)
+    return allp.sort_values("Date/Time", ascending=True).head(top_n).reset_index(drop=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -235,7 +233,6 @@ if fetch:
     if raw.empty:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
-        # Fetch historical if NFL or NBA
         hist = pd.DataFrame()
         if "NFL" in sport_name.upper():
             hist = fetch_historical("nfl")
@@ -250,17 +247,17 @@ if fetch:
             st.dataframe(board, use_container_width=True, hide_index=True)
 
         with tabs[1]:
-            t = best_per_event(raw, "h2h", top_n)
+            t = best_per_event(raw, "h2h", top_n, hist)
             st.subheader("Best Moneyline per Game")
             st.dataframe(t, use_container_width=True, hide_index=True)
 
         with tabs[2]:
-            t = best_per_event(raw, "totals", top_n)
+            t = best_per_event(raw, "totals", top_n, hist)
             st.subheader("Best Totals per Game")
             st.dataframe(t, use_container_width=True, hide_index=True)
 
         with tabs[3]:
-            t = best_per_event(raw, "spreads", top_n)
+            t = best_per_event(raw, "spreads", top_n, hist)
             st.subheader("Best Spreads per Game")
             st.dataframe(t, use_container_width=True, hide_index=True)
 

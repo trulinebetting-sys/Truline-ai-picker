@@ -15,7 +15,7 @@ except Exception:
     pass
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
-APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
+APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))  # Historical data API
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
 SOCCER_KEYS = [
@@ -38,7 +38,7 @@ SPORT_OPTIONS = {
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Live odds + historical context + AI-style ranking. No duplicates per game.")
+st.caption("Live odds + historical boost + AI-style ranking. No duplicates per game.")
 st.divider()
 
 # ─────────────────────────────────────────────
@@ -56,11 +56,10 @@ def implied_prob_american(odds: Optional[float]) -> float:
     o = float(odds)
     return 100.0 / (o + 100.0) if o > 0 else abs(o) / (abs(o) + 100.0)
 
-def assign_units(conf: float, hist_boost: float = 0.0) -> float:
+def assign_units(conf: float) -> float:
     if pd.isna(conf):
         return 0.5
-    combined = conf + hist_boost
-    return round(0.5 + 4.5 * max(0.0, min(1.0, combined)), 1)
+    return round(0.5 + 4.5 * max(0.0, min(1.0, conf)), 1)
 
 def fmt_pct(x: float) -> str:
     return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
@@ -121,77 +120,32 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                     })
     df = pd.DataFrame(rows)
 
+    # Fix datetime + filter only today/tomorrow
     if not df.empty and "commence_time" in df.columns:
-        df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
-        if pd.api.types.is_datetime64tz_dtype(df["commence_time"]):
-            df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
-        else:
-            df["Date/Time"] = df["commence_time"].dt.tz_localize("UTC").dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
+        df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce", utc=True)
+        df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
+
+        # filter only games today/tomorrow
+        now = pd.Timestamp.now(tz="US/Eastern").normalize()
+        cutoff = now + pd.Timedelta(days=2)
+        df = df[(df["commence_time"].dt.tz_convert("US/Eastern") >= now) & 
+                (df["commence_time"].dt.tz_convert("US/Eastern") < cutoff)]
+
     return df
-
-# ─────────────────────────────────────────────
-# API-Sports fetch (historical)
-# ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
-def fetch_historical(sport: str) -> pd.DataFrame:
-    if not APISPORTS_KEY:
-        return pd.DataFrame()
-
-    headers = {"x-apisports-key": APISPORTS_KEY}
-
-    # Map sports to endpoints
-    sport_urls = {
-        "nfl": "https://v1.american-football.api-sports.io/games?league=1&season=2023",
-        "nba": "https://v1.basketball.api-sports.io/games?league=12&season=2023",
-        "mlb": "https://v1.baseball.api-sports.io/games?league=1&season=2023",
-        "ncaaf": "https://v1.american-football.api-sports.io/games?league=2&season=2023",
-        "ncaab": "https://v1.basketball.api-sports.io/games?league=7&season=2023",
-        "soccer": "https://v3.football.api-sports.io/fixtures?season=2023&league=39"  # EPL as base
-    }
-
-    url = sport_urls.get(sport.lower())
-    if not url:
-        return pd.DataFrame()
-
-    r = requests.get(url, headers=headers, timeout=30)
-    if r.status_code != 200:
-        return pd.DataFrame()
-
-    data = r.json().get("response", [])
-    rows = []
-    for g in data:
-        home = g.get("teams", {}).get("home", {}).get("name", "Unknown")
-        away = g.get("teams", {}).get("away", {}).get("name", "Unknown")
-        winner = g.get("teams", {}).get("winner", {}).get("name", None)
-        rows.append({
-            "Date": g.get("date"),
-            "Home": home,
-            "Away": away,
-            "Winner": winner
-        })
-    return pd.DataFrame(rows)
 
 # ─────────────────────────────────────────────
 # Deduplicate best picks
 # ─────────────────────────────────────────────
-def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10, hist: pd.DataFrame = pd.DataFrame()) -> pd.DataFrame:
+def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.DataFrame:
     sub = df[df["market"] == market_key].copy()
     if sub.empty:
         return pd.DataFrame()
 
     sub["rank"] = sub.groupby("event_id")["conf_market"].rank(method="first", ascending=False)
     sub = sub[sub["rank"] == 1].copy()
-    sub = sub.sort_values("commence_time", ascending=True).head(top_n)
+    sub = sub.sort_values("commence_time", ascending=True).head(top_n)  # sort by soonest games
 
     sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
-
-    win_rates = hist["Winner"].value_counts(normalize=True).to_dict() if not hist.empty else {}
-    def hist_boost(row):
-        for t in [row["home_team"], row["away_team"]]:
-            if t in win_rates:
-                return win_rates[t]
-        return 0.0
-
     out = sub[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
     out = out.rename(columns={
         "book": "Sportsbook",
@@ -202,19 +156,23 @@ def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10, hist: pd.
         "conf_market": "Confidence"
     })
     out["Confidence"] = out["Confidence"].apply(fmt_pct)
-    out["Units"] = sub.apply(lambda r: assign_units(r["conf_market"], hist_boost(r)), axis=1)
+    out["Units"] = sub["conf_market"].apply(assign_units)
     return out.reset_index(drop=True)
 
-def ai_genius_top(df: pd.DataFrame, hist: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+def ai_genius_top(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     frames = []
     for m in ["h2h", "totals", "spreads"]:
-        t = best_per_event(df, m, top_n, hist)
+        t = best_per_event(df, m, top_n)
         if not t.empty:
             t["Market"] = m
             frames.append(t)
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True).sort_values("Date/Time", ascending=True).head(top_n).reset_index(drop=True)
+    allp = pd.concat(frames, ignore_index=True)
+    tmp = allp.copy()
+    tmp["_conf"] = tmp["Confidence"].str.replace("%", "", regex=False).astype(float)
+    tmp = tmp.sort_values("_conf", ascending=False).drop(columns=["_conf"])
+    return tmp.head(top_n).reset_index(drop=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -236,38 +194,27 @@ if fetch:
     if raw.empty:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
-        # historical mapping
-        hist = pd.DataFrame()
-        if "NFL" in sport_name.upper():
-            hist = fetch_historical("nfl")
-        elif "NBA" in sport_name.upper():
-            hist = fetch_historical("nba")
-        elif "MLB" in sport_name.upper():
-            hist = fetch_historical("mlb")
-        elif "NCAAF" in sport_name.upper():
-            hist = fetch_historical("ncaaf")
-        elif "NCAAB" in sport_name.upper():
-            hist = fetch_historical("ncaab")
-        elif "SOCCER" in sport_name.upper():
-            hist = fetch_historical("soccer")
-
         tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data"])
 
         with tabs[0]:
-            st.subheader("AI Genius — Top Picks (Live + Historical)")
-            st.dataframe(ai_genius_top(raw, hist, top_n), use_container_width=True, hide_index=True)
+            st.subheader("AI Genius — Top Picks")
+            board = ai_genius_top(raw, top_n)
+            st.dataframe(board, use_container_width=True, hide_index=True)
 
         with tabs[1]:
+            t = best_per_event(raw, "h2h", top_n)
             st.subheader("Best Moneyline per Game")
-            st.dataframe(best_per_event(raw, "h2h", top_n, hist), use_container_width=True, hide_index=True)
+            st.dataframe(t, use_container_width=True, hide_index=True)
 
         with tabs[2]:
+            t = best_per_event(raw, "totals", top_n)
             st.subheader("Best Totals per Game")
-            st.dataframe(best_per_event(raw, "totals", top_n, hist), use_container_width=True, hide_index=True)
+            st.dataframe(t, use_container_width=True, hide_index=True)
 
         with tabs[3]:
+            t = best_per_event(raw, "spreads", top_n)
             st.subheader("Best Spreads per Game")
-            st.dataframe(best_per_event(raw, "spreads", top_n, hist), use_container_width=True, hide_index=True)
+            st.dataframe(t, use_container_width=True, hide_index=True)
 
         with tabs[4]:
             st.subheader("Raw Data")

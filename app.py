@@ -139,14 +139,13 @@ def fetch_historical(sport: str) -> pd.DataFrame:
 
     headers = {"x-apisports-key": APISPORTS_KEY}
 
-    # Map sports to endpoints
     sport_urls = {
         "nfl": "https://v1.american-football.api-sports.io/games?league=1&season=2023",
         "nba": "https://v1.basketball.api-sports.io/games?league=12&season=2023",
         "mlb": "https://v1.baseball.api-sports.io/games?league=1&season=2023",
         "ncaaf": "https://v1.american-football.api-sports.io/games?league=2&season=2023",
         "ncaab": "https://v1.basketball.api-sports.io/games?league=7&season=2023",
-        "soccer": "https://v3.football.api-sports.io/fixtures?season=2023&league=39"  # EPL as base
+        "soccer": "https://v3.football.api-sports.io/fixtures?season=2023&league=39"
     }
 
     url = sport_urls.get(sport.lower())
@@ -172,15 +171,17 @@ def fetch_historical(sport: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 # ─────────────────────────────────────────────
-# Deduplicate best picks
+# Deduplicate best picks (fixed)
 # ─────────────────────────────────────────────
 def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10, hist: pd.DataFrame = pd.DataFrame()) -> pd.DataFrame:
     sub = df[df["market"] == market_key].copy()
     if sub.empty:
         return pd.DataFrame()
 
-    sub["rank"] = sub.groupby("event_id")["conf_market"].rank(method="first", ascending=False)
-    sub = sub[sub["rank"] == 1].copy()
+    # Pick only ONE best outcome per event (highest confidence)
+    sub = sub.loc[sub.groupby("event_id")["conf_market"].idxmax()].copy()
+
+    # Sort by game time
     sub = sub.sort_values("commence_time", ascending=True).head(top_n)
 
     sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]

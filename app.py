@@ -136,7 +136,11 @@ RESULTS_FILE = "bets.csv"
 
 def load_results() -> pd.DataFrame:
     if os.path.exists(RESULTS_FILE):
-        return pd.read_csv(RESULTS_FILE)
+        df = pd.read_csv(RESULTS_FILE)
+        # ✅ Ensure Sport column exists
+        if "Sport" not in df.columns:
+            df["Sport"] = "Unknown"
+        return df
     return pd.DataFrame(columns=["Sport", "Date/Time", "Matchup", "Pick", "Line", "Odds (US)", "Units", "Result"])
 
 def save_results(df: pd.DataFrame):
@@ -157,9 +161,9 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                     "Units": row["Units"],
                     "Result": "Pending"
                 }
-                if not ((results["Sport"] == entry["Sport"]) & 
-                        (results["Date/Time"] == entry["Date/Time"]) & 
-                        (results["Matchup"] == entry["Matchup"]) & 
+                if not ((results["Sport"] == entry["Sport"]) &
+                        (results["Date/Time"] == entry["Date/Time"]) &
+                        (results["Matchup"] == entry["Matchup"]) &
                         (results["Pick"] == entry["Pick"])).any():
                     results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
     save_results(results)

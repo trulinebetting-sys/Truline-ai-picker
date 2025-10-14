@@ -176,56 +176,58 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                     results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
     save_results(results)
 
-def update_results_auto():
-    """Checks finished games via API-Sports and updates bets to Win/Loss"""
+def update_results_auto(sport_name: str):
+    """Checks finished games for selected sport via API-Sports and updates bets to Win/Loss"""
     results = load_results()
     if results.empty:
         return results
 
     headers = {"x-apisports-key": APISPORTS_KEY}
+    url = SPORT_API_ENDPOINTS.get(sport_name)
+    if not url:
+        return results
 
-    for sport, url in SPORT_API_ENDPOINTS.items():
-        pending = results[(results["Sport"] == sport) & (results["Result"] == "Pending")]
-        if pending.empty:
-            continue
+    sport_results = results[(results["Sport"] == sport_name) & (results["Result"] == "Pending")]
+    if sport_results.empty:
+        return results
 
-        try:
-            r = requests.get(url, headers=headers, timeout=30)
-            if r.status_code == 200:
-                games = r.json().get("response", [])
-                for i, row in pending.iterrows():
-                    for g in games:
-                        home = g.get("teams", {}).get("home", {}).get("name")
-                        away = g.get("teams", {}).get("away", {}).get("name")
-                        winner = g.get("teams", {}).get("winner", {}).get("name", None)
+    try:
+        r = requests.get(url, headers=headers, timeout=30)
+        if r.status_code == 200:
+            games = r.json().get("response", [])
+            for i, row in sport_results.iterrows():
+                for g in games:
+                    home = g.get("teams", {}).get("home", {}).get("name")
+                    away = g.get("teams", {}).get("away", {}).get("name")
+                    winner = g.get("teams", {}).get("winner", {}).get("name", None)
 
-                        if f"{home} vs {away}" == row["Matchup"]:
-                            if winner == row["Pick"]:
-                                results.at[i, "Result"] = "Win"
-                            elif winner and winner != row["Pick"]:
-                                results.at[i, "Result"] = "Loss"
-        except Exception:
-            continue
+                    if f"{home} vs {away}" == row["Matchup"]:
+                        if winner == row["Pick"]:
+                            results.at[i, "Result"] = "Win"
+                        elif winner and winner != row["Pick"]:
+                            results.at[i, "Result"] = "Loss"
+    except Exception:
+        pass
 
     save_results(results)
     return results
 
-def show_results():
-    results = update_results_auto()
-    if results.empty:
-        st.info("No bets logged yet.")
-        return
-    st.subheader("📊 Results Tracker by Sport")
-    st.dataframe(results, use_container_width=True, hide_index=True)
+def show_results(sport_name: str):
+    results = update_results_auto(sport_name)
+    sport_results = results[results["Sport"] == sport_name]
 
-    grouped = results.groupby("Sport")
-    for sport, df in grouped:
-        total = len(df)
-        wins = (df["Result"] == "Win").sum()
-        losses = (df["Result"] == "Loss").sum()
-        if total > 0:
-            win_pct = (wins / total) * 100
-            st.metric(f"{sport} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+    if sport_results.empty:
+        st.info(f"No bets logged yet for {sport_name}.")
+        return
+    st.subheader(f"📊 Results Tracker — {sport_name}")
+    st.dataframe(sport_results, use_container_width=True, hide_index=True)
+
+    total = len(sport_results)
+    wins = (sport_results["Result"] == "Win").sum()
+    losses = (sport_results["Result"] == "Loss").sum()
+    if total > 0:
+        win_pct = (wins / total) * 100
+        st.metric(f"{sport_name} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -316,6 +318,6 @@ if fetch:
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
 
         with tabs[5]:
-            show_results()
+            show_results(sport_name)
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

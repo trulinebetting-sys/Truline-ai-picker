@@ -36,6 +36,15 @@ SPORT_OPTIONS = {
     "Soccer (All Major Leagues)": SOCCER_KEYS,
 }
 
+SPORT_API_ENDPOINTS = {
+    "NFL": "https://v1.american-football.api-sports.io/games?league=1&season=2023",
+    "NBA": "https://v1.basketball.api-sports.io/games?league=12&season=2023",
+    "MLB": "https://v1.baseball.api-sports.io/games?league=1&season=2023",
+    "College Football (NCAAF)": "https://v1.american-football.api-sports.io/games?league=2&season=2023",
+    "College Basketball (NCAAB)": "https://v1.basketball.api-sports.io/games?league=7&season=2023",
+    "Soccer (All Major Leagues)": "https://v3.football.api-sports.io/fixtures?season=2023&league=39"
+}
+
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
 st.caption("Live odds + historical context + AI-style ranking. Tracks results automatically ✅")
@@ -117,7 +126,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "odds_american": oc.get("price"),
                         "odds_decimal": american_to_decimal(oc.get("price")),
                         "conf_market": implied_prob_american(oc.get("price")),
-                        "sport": sport_name,  # ✅ tag picks by sport
+                        "sport": sport_name,
                     })
     df = pd.DataFrame(rows)
 
@@ -167,21 +176,56 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                     results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
     save_results(results)
 
-def show_results(sport_name: str):
+def update_results_auto():
+    """Checks finished games via API-Sports and updates bets to Win/Loss"""
     results = load_results()
-    sport_results = results[results["Sport"] == sport_name]  # ✅ only show current sport
-    if sport_results.empty:
-        st.info(f"No bets logged yet for {sport_name}.")
-        return
-    st.subheader(f"📊 Results Tracker — {sport_name}")
-    st.dataframe(sport_results, use_container_width=True, hide_index=True)
+    if results.empty:
+        return results
 
-    total = len(sport_results)
-    wins = (sport_results["Result"] == "Win").sum()
-    losses = (sport_results["Result"] == "Loss").sum()
-    if total > 0:
-        win_pct = (wins / total) * 100
-        st.metric(f"{sport_name} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+    headers = {"x-apisports-key": APISPORTS_KEY}
+
+    for sport, url in SPORT_API_ENDPOINTS.items():
+        pending = results[(results["Sport"] == sport) & (results["Result"] == "Pending")]
+        if pending.empty:
+            continue
+
+        try:
+            r = requests.get(url, headers=headers, timeout=30)
+            if r.status_code == 200:
+                games = r.json().get("response", [])
+                for i, row in pending.iterrows():
+                    for g in games:
+                        home = g.get("teams", {}).get("home", {}).get("name")
+                        away = g.get("teams", {}).get("away", {}).get("name")
+                        winner = g.get("teams", {}).get("winner", {}).get("name", None)
+
+                        if f"{home} vs {away}" == row["Matchup"]:
+                            if winner == row["Pick"]:
+                                results.at[i, "Result"] = "Win"
+                            elif winner and winner != row["Pick"]:
+                                results.at[i, "Result"] = "Loss"
+        except Exception:
+            continue
+
+    save_results(results)
+    return results
+
+def show_results():
+    results = update_results_auto()
+    if results.empty:
+        st.info("No bets logged yet.")
+        return
+    st.subheader("📊 Results Tracker by Sport")
+    st.dataframe(results, use_container_width=True, hide_index=True)
+
+    grouped = results.groupby("Sport")
+    for sport, df in grouped:
+        total = len(df)
+        wins = (df["Result"] == "Win").sum()
+        losses = (df["Result"] == "Loss").sum()
+        if total > 0:
+            win_pct = (wins / total) * 100
+            st.metric(f"{sport} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -272,6 +316,6 @@ if fetch:
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
 
         with tabs[5]:
-            show_results(sport_name)  # ✅ filter to current sport
+            show_results()
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

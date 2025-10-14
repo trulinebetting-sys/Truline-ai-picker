@@ -1,9 +1,9 @@
 import os
-from typing import Dict, Any, Optional
 import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
+from typing import Dict, Any, Optional
 
 # ─────────────────────────────────────────────
 # Safe dotenv
@@ -38,7 +38,7 @@ SPORT_OPTIONS = {
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Live odds + historical context + AI-style ranking. Now with overall win % tracker.")
+st.caption("Live odds + historical context + AI-style ranking + Real Results Tracking.")
 st.divider()
 
 # ─────────────────────────────────────────────
@@ -65,12 +65,43 @@ def assign_units(conf: float, hist_boost: float = 0.0) -> float:
 def fmt_pct(x: float) -> str:
     return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
 
-def calc_overall_win_pct(df: pd.DataFrame) -> str:
-    """Calculate average expected win % from confidence column."""
-    if df.empty or "Confidence" not in df.columns:
+# ─────────────────────────────────────────────
+# Bets Logging (CSV)
+# ─────────────────────────────────────────────
+BETS_FILE = "bets.csv"
+
+def load_bets() -> pd.DataFrame:
+    if os.path.exists(BETS_FILE):
+        return pd.read_csv(BETS_FILE)
+    return pd.DataFrame(columns=["Date", "Matchup", "Pick", "Odds", "Units", "Result"])
+
+def save_bet(date, matchup, pick, odds, units, result="Pending"):
+    bets = load_bets()
+    bets = pd.concat([bets, pd.DataFrame([{
+        "Date": date,
+        "Matchup": matchup,
+        "Pick": pick,
+        "Odds": odds,
+        "Units": units,
+        "Result": result
+    }])], ignore_index=True)
+    bets.to_csv(BETS_FILE, index=False)
+
+def update_bet_result(index, result):
+    bets = load_bets()
+    if 0 <= index < len(bets):
+        bets.at[index, "Result"] = result
+        bets.to_csv(BETS_FILE, index=False)
+
+def calc_real_win_pct() -> str:
+    bets = load_bets()
+    if bets.empty:
         return "N/A"
-    vals = df["Confidence"].str.replace("%", "", regex=False).astype(float)
-    return f"{vals.mean():.1f}%" if not vals.empty else "N/A"
+    valid = bets[bets["Result"].isin(["Win", "Loss"])]
+    if valid.empty:
+        return "N/A"
+    win_pct = (valid["Result"] == "Win").mean() * 100
+    return f"{win_pct:.1f}%"
 
 # ─────────────────────────────────────────────
 # Odds API fetch
@@ -134,55 +165,15 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return df
 
 # ─────────────────────────────────────────────
-# API-Sports fetch (historical)
-# ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
-def fetch_historical(sport: str) -> pd.DataFrame:
-    if not APISPORTS_KEY:
-        return pd.DataFrame()
-    headers = {"x-apisports-key": APISPORTS_KEY}
-    sport_urls = {
-        "nfl": "https://v1.american-football.api-sports.io/games?league=1&season=2023",
-        "nba": "https://v1.basketball.api-sports.io/games?league=12&season=2023",
-        "mlb": "https://v1.baseball.api-sports.io/games?league=1&season=2023",
-        "ncaaf": "https://v1.american-football.api-sports.io/games?league=2&season=2023",
-        "ncaab": "https://v1.basketball.api-sports.io/games?league=7&season=2023",
-        "soccer": "https://v3.football.api-sports.io/fixtures?season=2023&league=39"
-    }
-    url = sport_urls.get(sport.lower())
-    if not url:
-        return pd.DataFrame()
-    r = requests.get(url, headers=headers, timeout=30)
-    if r.status_code != 200:
-        return pd.DataFrame()
-    data = r.json().get("response", [])
-    rows = []
-    for g in data:
-        home = g.get("teams", {}).get("home", {}).get("name", "Unknown")
-        away = g.get("teams", {}).get("away", {}).get("name", "Unknown")
-        winner = g.get("teams", {}).get("winner", {}).get("name", None)
-        rows.append({"Date": g.get("date"), "Home": home, "Away": away, "Winner": winner})
-    return pd.DataFrame(rows)
-
-# ─────────────────────────────────────────────
 # Deduplicate best picks
 # ─────────────────────────────────────────────
-def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10, hist: pd.DataFrame = pd.DataFrame()) -> pd.DataFrame:
+def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.DataFrame:
     sub = df[df["market"] == market_key].copy()
     if sub.empty:
         return pd.DataFrame()
-    # one best pick per game
     sub = sub.loc[sub.groupby("event_id")["conf_market"].idxmax()].copy()
     sub = sub.sort_values("commence_time", ascending=True).head(top_n)
     sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
-
-    # boost confidence w/ history
-    win_rates = hist["Winner"].value_counts(normalize=True).to_dict() if not hist.empty else {}
-    def hist_boost(row):
-        for t in [row["home_team"], row["away_team"]]:
-            if t in win_rates:
-                return win_rates[t]
-        return 0.0
 
     out = sub[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
     out = out.rename(columns={
@@ -191,19 +182,8 @@ def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10, hist: pd.
         "conf_market": "Confidence"
     })
     out["Confidence"] = out["Confidence"].apply(fmt_pct)
-    out["Units"] = sub.apply(lambda r: assign_units(r["conf_market"], hist_boost(r)), axis=1)
+    out["Units"] = sub["conf_market"].apply(lambda c: assign_units(c))
     return out.reset_index(drop=True)
-
-def ai_genius_top(df: pd.DataFrame, hist: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
-    frames = []
-    for m in ["h2h", "totals", "spreads"]:
-        t = best_per_event(df, m, top_n, hist)
-        if not t.empty:
-            t["Market"] = m
-            frames.append(t)
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True).sort_values("Date/Time", ascending=True).head(top_n).reset_index(drop=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -218,50 +198,56 @@ if fetch:
     sport_key = SPORT_OPTIONS[sport_name]
     if isinstance(sport_key, list):
         parts = [fetch_odds(k, regions) for k in sport_key]
-        raw = pd.concat([p for p in parts if p is not None and not p.empty], ignore_index=True) if parts else pd.DataFrame()
+        raw = pd.concat([p for p in parts if not p.empty], ignore_index=True) if parts else pd.DataFrame()
     else:
         raw = fetch_odds(sport_key, regions)
 
     if raw.empty:
-        st.warning("No data returned. Try a different sport or check API quota.")
+        st.warning("No data returned.")
     else:
-        # fetch historical data
-        hist = pd.DataFrame()
-        if "NFL" in sport_name.upper(): hist = fetch_historical("nfl")
-        elif "NBA" in sport_name.upper(): hist = fetch_historical("nba")
-        elif "MLB" in sport_name.upper(): hist = fetch_historical("mlb")
-        elif "NCAAF" in sport_name.upper(): hist = fetch_historical("ncaaf")
-        elif "NCAAB" in sport_name.upper(): hist = fetch_historical("ncaab")
-        elif "SOCCER" in sport_name.upper(): hist = fetch_historical("soccer")
-
-        tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data"])
+        tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Results", "Raw Data"])
 
         with tabs[0]:
-            st.subheader("AI Genius — Top Picks (Live + Historical)")
-            board = ai_genius_top(raw, hist, top_n)
-            st.dataframe(board, use_container_width=True, hide_index=True)
-            st.markdown(f"**Overall Expected Win %:** {calc_overall_win_pct(board)}")
+            st.subheader("AI Genius — Top Picks")
+            ml = best_per_event(raw, "h2h", top_n)
+            st.dataframe(ml, use_container_width=True, hide_index=True)
+            if not ml.empty:
+                row = ml.iloc[0]
+                if st.button(f"Log Bet: {row['Matchup']} - {row['Pick']}"):
+                    save_bet(row["Date/Time"], row["Matchup"], row["Pick"], row["Odds (US)"], row["Units"])
+                    st.success("Bet logged!")
 
         with tabs[1]:
-            st.subheader("Best Moneyline per Game")
-            t = best_per_event(raw, "h2h", top_n, hist)
+            st.subheader("Best Moneylines")
+            t = best_per_event(raw, "h2h", top_n)
             st.dataframe(t, use_container_width=True, hide_index=True)
-            st.markdown(f"**Overall Expected Win %:** {calc_overall_win_pct(t)}")
 
         with tabs[2]:
-            st.subheader("Best Totals per Game")
-            t = best_per_event(raw, "totals", top_n, hist)
+            st.subheader("Best Totals")
+            t = best_per_event(raw, "totals", top_n)
             st.dataframe(t, use_container_width=True, hide_index=True)
-            st.markdown(f"**Overall Expected Win %:** {calc_overall_win_pct(t)}")
 
         with tabs[3]:
-            st.subheader("Best Spreads per Game")
-            t = best_per_event(raw, "spreads", top_n, hist)
+            st.subheader("Best Spreads")
+            t = best_per_event(raw, "spreads", top_n)
             st.dataframe(t, use_container_width=True, hide_index=True)
-            st.markdown(f"**Overall Expected Win %:** {calc_overall_win_pct(t)}")
 
         with tabs[4]:
-            st.subheader("Raw Data")
+            st.subheader("Your Results")
+            bets = load_bets()
+            st.dataframe(bets, use_container_width=True, hide_index=True)
+            st.markdown(f"**Overall Real Win %:** {calc_real_win_pct()}")
+
+            if not bets.empty:
+                index = st.number_input("Enter bet index to update result", min_value=0, max_value=len(bets)-1, step=1)
+                result = st.selectbox("Result", ["Pending", "Win", "Loss"])
+                if st.button("Update Bet Result"):
+                    update_bet_result(index, result)
+                    st.success("Result updated!")
+
+        with tabs[5]:
+            st.subheader("Raw Odds Data")
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
+
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

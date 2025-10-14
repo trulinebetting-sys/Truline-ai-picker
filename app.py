@@ -117,6 +117,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "odds_american": oc.get("price"),
                         "odds_decimal": american_to_decimal(oc.get("price")),
                         "conf_market": implied_prob_american(oc.get("price")),
+                        "sport": sport_name,  # tag picks by sport
                     })
     df = pd.DataFrame(rows)
 
@@ -136,17 +137,18 @@ RESULTS_FILE = "bets.csv"
 def load_results() -> pd.DataFrame:
     if os.path.exists(RESULTS_FILE):
         return pd.read_csv(RESULTS_FILE)
-    return pd.DataFrame(columns=["Date/Time", "Matchup", "Pick", "Line", "Odds (US)", "Units", "Result"])
+    return pd.DataFrame(columns=["Sport", "Date/Time", "Matchup", "Pick", "Line", "Odds (US)", "Units", "Result"])
 
 def save_results(df: pd.DataFrame):
     df.to_csv(RESULTS_FILE, index=False)
 
-def auto_log_picks(dfs: Dict[str, pd.DataFrame]):
+def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
     for name, picks in dfs.items():
         if not picks.empty:
             for _, row in picks.iterrows():
                 entry = {
+                    "Sport": sport_name,
                     "Date/Time": row["Date/Time"],
                     "Matchup": row["Matchup"],
                     "Pick": row["Pick"],
@@ -155,58 +157,29 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame]):
                     "Units": row["Units"],
                     "Result": "Pending"
                 }
-                # Avoid duplicates
-                if not ((results["Date/Time"] == entry["Date/Time"]) & (results["Matchup"] == entry["Matchup"]) & (results["Pick"] == entry["Pick"])).any():
+                if not ((results["Sport"] == entry["Sport"]) & 
+                        (results["Date/Time"] == entry["Date/Time"]) & 
+                        (results["Matchup"] == entry["Matchup"]) & 
+                        (results["Pick"] == entry["Pick"])).any():
                     results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
     save_results(results)
 
-def update_results_auto():
-    """Automatically fetches results from API-Sports and updates Win/Loss"""
-    results = load_results()
-    if results.empty:
-        return results
-
-    headers = {"x-apisports-key": APISPORTS_KEY}
-
-    # Loop through pending bets
-    for i, row in results.iterrows():
-        if row["Result"] == "Pending":
-            matchup = row["Matchup"]
-            try:
-                # Use API-Sports basketball endpoint as example (extend for other sports)
-                url = "https://v1.basketball.api-sports.io/games?season=2023"
-                r = requests.get(url, headers=headers, timeout=30)
-                if r.status_code == 200:
-                    games = r.json().get("response", [])
-                    for g in games:
-                        home = g.get("teams", {}).get("home", {}).get("name")
-                        away = g.get("teams", {}).get("away", {}).get("name")
-                        winner = g.get("teams", {}).get("winner", {}).get("name", None)
-                        if home and away and matchup == f"{home} vs {away}":
-                            if winner == row["Pick"]:
-                                results.at[i, "Result"] = "Win"
-                            elif winner and winner != row["Pick"]:
-                                results.at[i, "Result"] = "Loss"
-            except Exception:
-                pass
-
-    save_results(results)
-    return results
-
 def show_results():
-    results = update_results_auto()
+    results = load_results()
     if results.empty:
         st.info("No bets logged yet.")
         return
-    st.subheader("📊 Results Tracker (Auto-Updated)")
+    st.subheader("📊 Results Tracker by Sport")
     st.dataframe(results, use_container_width=True, hide_index=True)
 
-    total = len(results)
-    wins = (results["Result"] == "Win").sum()
-    losses = (results["Result"] == "Loss").sum()
-    if total > 0:
-        win_pct = (wins / total) * 100
-        st.metric("Overall Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+    grouped = results.groupby("Sport")
+    for sport, df in grouped:
+        total = len(df)
+        wins = (df["Result"] == "Win").sum()
+        losses = (df["Result"] == "Loss").sum()
+        if total > 0:
+            win_pct = (wins / total) * 100
+            st.metric(f"{sport} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -272,7 +245,7 @@ if fetch:
         spreads = best_per_event(raw, "spreads", top_n)
         ai_picks = ai_genius_top(raw, top_n)
 
-        auto_log_picks({"Moneyline": ml, "Totals": totals, "Spreads": spreads, "AI Genius": ai_picks})
+        auto_log_picks({"Moneyline": ml, "Totals": totals, "Spreads": spreads, "AI Genius": ai_picks}, sport_name)
 
         tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data", "📊 Results"])
 

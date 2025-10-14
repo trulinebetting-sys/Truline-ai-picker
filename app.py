@@ -117,7 +117,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "odds_american": oc.get("price"),
                         "odds_decimal": american_to_decimal(oc.get("price")),
                         "conf_market": implied_prob_american(oc.get("price")),
-                        "sport": sport_name,  # tag picks by sport
+                        "sport": sport_name,  # ✅ tag picks by sport
                     })
     df = pd.DataFrame(rows)
 
@@ -137,7 +137,6 @@ RESULTS_FILE = "bets.csv"
 def load_results() -> pd.DataFrame:
     if os.path.exists(RESULTS_FILE):
         df = pd.read_csv(RESULTS_FILE)
-        # ✅ Ensure Sport column exists
         if "Sport" not in df.columns:
             df["Sport"] = "Unknown"
         return df
@@ -168,22 +167,21 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                     results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
     save_results(results)
 
-def show_results():
+def show_results(sport_name: str):
     results = load_results()
-    if results.empty:
-        st.info("No bets logged yet.")
+    sport_results = results[results["Sport"] == sport_name]  # ✅ only show current sport
+    if sport_results.empty:
+        st.info(f"No bets logged yet for {sport_name}.")
         return
-    st.subheader("📊 Results Tracker by Sport")
-    st.dataframe(results, use_container_width=True, hide_index=True)
+    st.subheader(f"📊 Results Tracker — {sport_name}")
+    st.dataframe(sport_results, use_container_width=True, hide_index=True)
 
-    grouped = results.groupby("Sport")
-    for sport, df in grouped:
-        total = len(df)
-        wins = (df["Result"] == "Win").sum()
-        losses = (df["Result"] == "Loss").sum()
-        if total > 0:
-            win_pct = (wins / total) * 100
-            st.metric(f"{sport} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+    total = len(sport_results)
+    wins = (sport_results["Result"] == "Win").sum()
+    losses = (sport_results["Result"] == "Loss").sum()
+    if total > 0:
+        win_pct = (wins / total) * 100
+        st.metric(f"{sport_name} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -274,6 +272,6 @@ if fetch:
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
 
         with tabs[5]:
-            show_results()
+            show_results(sport_name)  # ✅ filter to current sport
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

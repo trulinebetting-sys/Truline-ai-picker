@@ -47,7 +47,7 @@ SPORT_API_ENDPOINTS = {
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Live odds + historical context + AI-style ranking. Tracks results automatically ✅")
+st.caption("Live odds + historical context + AI-style ranking. Tracks results + bankroll ✅")
 st.divider()
 
 # ─────────────────────────────────────────────
@@ -139,7 +139,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return df
 
 # ─────────────────────────────────────────────
-# Results tracking
+# Results tracking + bankroll
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -177,7 +177,6 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     save_results(results)
 
 def update_results_auto(sport_name: str):
-    """Checks finished games for selected sport via API-Sports and updates bets to Win/Loss"""
     results = load_results()
     if results.empty:
         return results
@@ -227,7 +226,16 @@ def show_results(sport_name: str):
     losses = (sport_results["Result"] == "Loss").sum()
     if total > 0:
         win_pct = (wins / total) * 100
-        st.metric(f"{sport_name} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+
+        # bankroll calculation
+        sport_results["PnL"] = sport_results.apply(
+            lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0), axis=1
+        )
+        bankroll = sport_results["PnL"].sum()
+
+        col1, col2 = st.columns(2)
+        col1.metric(f"{sport_name} Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+        col2.metric(f"{sport_name} Bankroll (Units)", f"{bankroll:.1f}")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

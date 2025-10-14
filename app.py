@@ -46,7 +46,7 @@ SPORT_API_ENDPOINTS = {
 }
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
-st.title("TruLine – AI Genius Picker")
+st.title("TruLine – AI Genius Picker 🚀")
 st.caption("Live odds + historical context + AI-style ranking. Tracks results + bankroll ✅")
 st.divider()
 
@@ -54,20 +54,17 @@ st.divider()
 # Helpers
 # ─────────────────────────────────────────────
 def american_to_decimal(odds: Optional[float]) -> float:
-    if odds is None or pd.isna(odds):
-        return np.nan
+    if odds is None or pd.isna(odds): return np.nan
     o = float(odds)
     return 1 + (o / 100.0) if o > 0 else 1 + (100.0 / abs(o))
 
 def implied_prob_american(odds: Optional[float]) -> float:
-    if odds is None or pd.isna(odds):
-        return np.nan
+    if odds is None or pd.isna(odds): return np.nan
     o = float(odds)
     return 100.0 / (o + 100.0) if o > 0 else abs(o) / (abs(o) + 100.0)
 
 def assign_units(conf: float) -> float:
-    if pd.isna(conf):
-        return 0.5
+    if pd.isna(conf): return 0.5
     return round(0.5 + 4.5 * max(0.0, min(1.0, conf)), 1)
 
 def fmt_pct(x: float) -> str:
@@ -78,16 +75,12 @@ def fmt_pct(x: float) -> str:
 # ─────────────────────────────────────────────
 def _odds_get(url: str, params: Dict[str, Any]) -> Optional[Any]:
     if not ODDS_API_KEY:
-        st.error("Missing ODDS_API_KEY. Add it to `.env` or Streamlit Secrets.")
+        st.error("Missing ODDS_API_KEY.")
         return None
     try:
         r = requests.get(url, params=params, timeout=30)
-        if r.status_code != 200:
-            st.warning(f"Odds API error {r.status_code}: {r.text[:250]}")
-            return None
-        return r.json()
-    except Exception as e:
-        st.warning(f"Network error: {e}")
+        return r.json() if r.status_code == 200 else None
+    except Exception:
         return None
 
 @st.cache_data(ttl=60)
@@ -99,15 +92,13 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         "markets": markets,
         "oddsFormat": "american"
     })
-    if not data:
-        return pd.DataFrame()
+    if not data: return pd.DataFrame()
 
     rows = []
     for ev in data:
         event_id = ev.get("id")
         commence = ev.get("commence_time")
-        home = ev.get("home_team", "Unknown")
-        away = ev.get("away_team", "Unknown")
+        home, away = ev.get("home_team", "Unknown"), ev.get("away_team", "Unknown")
 
         for bk in ev.get("bookmakers", []):
             book = bk.get("title")
@@ -129,8 +120,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "sport": sport_name,
                     })
     df = pd.DataFrame(rows)
-
-    if not df.empty and "commence_time" in df.columns:
+    if not df.empty:
         df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
         if pd.api.types.is_datetime64tz_dtype(df["commence_time"]):
             df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
@@ -149,7 +139,7 @@ def load_results() -> pd.DataFrame:
         if "Sport" not in df.columns:
             df["Sport"] = "Unknown"
         return df
-    return pd.DataFrame(columns=["Sport", "Date/Time", "Matchup", "Pick", "Line", "Odds (US)", "Units", "Result"])
+    return pd.DataFrame(columns=["Sport","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
 def save_results(df: pd.DataFrame):
     df.to_csv(RESULTS_FILE, index=False)
@@ -164,8 +154,8 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                     "Date/Time": row["Date/Time"],
                     "Matchup": row["Matchup"],
                     "Pick": row["Pick"],
-                    "Line": row["Line"],
-                    "Odds (US)": row["Odds (US)"],
+                    "Line": row.get("Line", ""),
+                    "Odds (US)": row.get("Odds (US)", ""),
                     "Units": row["Units"],
                     "Result": "Pending"
                 }
@@ -178,17 +168,14 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
 
 def update_results_auto(sport_name: str):
     results = load_results()
-    if results.empty:
-        return results
+    if results.empty: return results
 
     headers = {"x-apisports-key": APISPORTS_KEY}
     url = SPORT_API_ENDPOINTS.get(sport_name)
-    if not url:
-        return results
+    if not url: return results
 
     sport_results = results[(results["Sport"] == sport_name) & (results["Result"] == "Pending")]
-    if sport_results.empty:
-        return results
+    if sport_results.empty: return results
 
     try:
         r = requests.get(url, headers=headers, timeout=30)
@@ -199,7 +186,6 @@ def update_results_auto(sport_name: str):
                     home = g.get("teams", {}).get("home", {}).get("name")
                     away = g.get("teams", {}).get("away", {}).get("name")
                     winner = g.get("teams", {}).get("winner", {}).get("name", None)
-
                     if f"{home} vs {away}" == row["Matchup"]:
                         if winner == row["Pick"]:
                             results.at[i, "Result"] = "Win"
@@ -226,8 +212,6 @@ def show_results(sport_name: str):
     losses = (sport_results["Result"] == "Loss").sum()
     if total > 0:
         win_pct = (wins / total) * 100
-
-        # bankroll calculation
         sport_results["PnL"] = sport_results.apply(
             lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0), axis=1
         )
@@ -238,6 +222,32 @@ def show_results(sport_name: str):
         col2.metric(f"{sport_name} Bankroll (Units)", f"{bankroll:.1f}")
 
 # ─────────────────────────────────────────────
+# Picks + AI Genius
+# ─────────────────────────────────────────────
+def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.DataFrame:
+    sub = df[df["market"] == market_key].copy()
+    if sub.empty: return pd.DataFrame()
+    sub = sub.loc[sub.groupby("event_id")["conf_market"].idxmax()].copy()
+    sub = sub.sort_values("commence_time", ascending=True).head(top_n)
+    sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
+    out = sub[["Date/Time","Matchup","book","outcome","line","odds_american","odds_decimal","conf_market"]]
+    out = out.rename(columns={"book":"Sportsbook","outcome":"Pick","line":"Line","odds_american":"Odds (US)","odds_decimal":"Odds (Dec)","conf_market":"Confidence"})
+    out["Confidence"] = out["Confidence"].apply(fmt_pct)
+    out["Units"] = sub["conf_market"].apply(assign_units)
+    return out.reset_index(drop=True)
+
+def ai_genius_top(df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
+    if df.empty: return pd.DataFrame()
+    best = df.loc[df.groupby("event_id")["conf_market"].idxmax()].copy()
+    best = best.sort_values("conf_market", ascending=False).head(top_n)
+    best["Matchup"] = best["home_team"] + " vs " + best["away_team"]
+    out = best[["Date/Time","Matchup","book","outcome","line","odds_american","odds_decimal","conf_market"]]
+    out = out.rename(columns={"book":"Sportsbook","outcome":"Pick","line":"Line","odds_american":"Odds (US)","odds_decimal":"Odds (Dec)","conf_market":"Confidence"})
+    out["Confidence"] = out["Confidence"].apply(fmt_pct)
+    out["Units"] = best["conf_market"].apply(assign_units)
+    return out.reset_index(drop=True)
+
+# ─────────────────────────────────────────────
 # Sidebar + Main
 # ─────────────────────────────────────────────
 with st.sidebar:
@@ -245,45 +255,6 @@ with st.sidebar:
     regions = st.text_input("Regions", value=DEFAULT_REGIONS)
     top_n = st.slider("Top picks per tab", 3, 20, 10)
     fetch = st.button("Fetch Live Odds")
-
-def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.DataFrame:
-    sub = df[df["market"] == market_key].copy()
-    if sub.empty:
-        return pd.DataFrame()
-    sub = sub.loc[sub.groupby("event_id")["conf_market"].idxmax()].copy()
-    sub = sub.sort_values("commence_time", ascending=True).head(top_n)
-    sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
-    out = sub[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
-    out = out.rename(columns={
-        "book": "Sportsbook",
-        "outcome": "Pick",
-        "line": "Line",
-        "odds_american": "Odds (US)",
-        "odds_decimal": "Odds (Dec)",
-        "conf_market": "Confidence"
-    })
-    out["Confidence"] = out["Confidence"].apply(fmt_pct)
-    out["Units"] = sub["conf_market"].apply(assign_units)
-    return out.reset_index(drop=True)
-
-def ai_genius_top(df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame()
-    best = df.loc[df.groupby("event_id")["conf_market"].idxmax()].copy()
-    best = best.sort_values("conf_market", ascending=False).head(top_n)
-    best["Matchup"] = best["home_team"] + " vs " + best["away_team"]
-    out = best[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
-    out = out.rename(columns={
-        "book": "Sportsbook",
-        "outcome": "Pick",
-        "line": "Line",
-        "odds_american": "Odds (US)",
-        "odds_decimal": "Odds (Dec)",
-        "conf_market": "Confidence"
-    })
-    out["Confidence"] = out["Confidence"].apply(fmt_pct)
-    out["Units"] = best["conf_market"].apply(assign_units)
-    return out.reset_index(drop=True)
 
 if fetch:
     sport_key = SPORT_OPTIONS[sport_name]
@@ -303,7 +274,7 @@ if fetch:
 
         auto_log_picks({"Moneyline": ml, "Totals": totals, "Spreads": spreads, "AI Genius": ai_picks}, sport_name)
 
-        tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data", "📊 Results"])
+        tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
 
         with tabs[0]:
             st.subheader("AI Genius — Highest Confidence Picks")

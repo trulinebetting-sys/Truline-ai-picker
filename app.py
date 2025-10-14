@@ -1,9 +1,9 @@
 import os
+from typing import List, Dict, Any, Optional
 import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
-from typing import Dict, Any, Optional
 
 # ─────────────────────────────────────────────
 # Safe dotenv
@@ -38,7 +38,7 @@ SPORT_OPTIONS = {
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker")
-st.caption("Live odds + historical context + AI-style ranking + Real Results Tracking.")
+st.caption("Live odds + historical context + AI-style ranking. Tracks results automatically ✅")
 st.divider()
 
 # ─────────────────────────────────────────────
@@ -56,65 +56,29 @@ def implied_prob_american(odds: Optional[float]) -> float:
     o = float(odds)
     return 100.0 / (o + 100.0) if o > 0 else abs(o) / (abs(o) + 100.0)
 
-def assign_units(conf: float, hist_boost: float = 0.0) -> float:
+def assign_units(conf: float) -> float:
     if pd.isna(conf):
         return 0.5
-    combined = conf + hist_boost
-    return round(0.5 + 4.5 * max(0.0, min(1.0, combined)), 1)
+    return round(0.5 + 4.5 * max(0.0, min(1.0, conf)), 1)
 
 def fmt_pct(x: float) -> str:
     return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
-
-# ─────────────────────────────────────────────
-# Bets Logging (CSV)
-# ─────────────────────────────────────────────
-BETS_FILE = "bets.csv"
-
-def load_bets() -> pd.DataFrame:
-    if os.path.exists(BETS_FILE):
-        return pd.read_csv(BETS_FILE)
-    return pd.DataFrame(columns=["Date", "Matchup", "Pick", "Odds", "Units", "Result"])
-
-def save_bet(date, matchup, pick, odds, units, result="Pending"):
-    bets = load_bets()
-    bets = pd.concat([bets, pd.DataFrame([{
-        "Date": date,
-        "Matchup": matchup,
-        "Pick": pick,
-        "Odds": odds,
-        "Units": units,
-        "Result": result
-    }])], ignore_index=True)
-    bets.to_csv(BETS_FILE, index=False)
-
-def update_bet_result(index, result):
-    bets = load_bets()
-    if 0 <= index < len(bets):
-        bets.at[index, "Result"] = result
-        bets.to_csv(BETS_FILE, index=False)
-
-def calc_real_win_pct() -> str:
-    bets = load_bets()
-    if bets.empty:
-        return "N/A"
-    valid = bets[bets["Result"].isin(["Win", "Loss"])]
-    if valid.empty:
-        return "N/A"
-    win_pct = (valid["Result"] == "Win").mean() * 100
-    return f"{win_pct:.1f}%"
 
 # ─────────────────────────────────────────────
 # Odds API fetch
 # ─────────────────────────────────────────────
 def _odds_get(url: str, params: Dict[str, Any]) -> Optional[Any]:
     if not ODDS_API_KEY:
+        st.error("Missing ODDS_API_KEY. Add it to `.env` or Streamlit Secrets.")
         return None
     try:
         r = requests.get(url, params=params, timeout=30)
         if r.status_code != 200:
+            st.warning(f"Odds API error {r.status_code}: {r.text[:250]}")
             return None
         return r.json()
-    except Exception:
+    except Exception as e:
+        st.warning(f"Network error: {e}")
         return None
 
 @st.cache_data(ttl=60)
@@ -165,25 +129,84 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return df
 
 # ─────────────────────────────────────────────
-# Deduplicate best picks
+# Results tracking
 # ─────────────────────────────────────────────
-def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.DataFrame:
-    sub = df[df["market"] == market_key].copy()
-    if sub.empty:
-        return pd.DataFrame()
-    sub = sub.loc[sub.groupby("event_id")["conf_market"].idxmax()].copy()
-    sub = sub.sort_values("commence_time", ascending=True).head(top_n)
-    sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
+RESULTS_FILE = "bets.csv"
 
-    out = sub[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
-    out = out.rename(columns={
-        "book": "Sportsbook", "outcome": "Pick", "line": "Line",
-        "odds_american": "Odds (US)", "odds_decimal": "Odds (Dec)",
-        "conf_market": "Confidence"
-    })
-    out["Confidence"] = out["Confidence"].apply(fmt_pct)
-    out["Units"] = sub["conf_market"].apply(lambda c: assign_units(c))
-    return out.reset_index(drop=True)
+def load_results() -> pd.DataFrame:
+    if os.path.exists(RESULTS_FILE):
+        return pd.read_csv(RESULTS_FILE)
+    return pd.DataFrame(columns=["Date/Time", "Matchup", "Pick", "Line", "Odds (US)", "Units", "Result"])
+
+def save_results(df: pd.DataFrame):
+    df.to_csv(RESULTS_FILE, index=False)
+
+def auto_log_picks(dfs: Dict[str, pd.DataFrame]):
+    results = load_results()
+    for name, picks in dfs.items():
+        if not picks.empty:
+            for _, row in picks.iterrows():
+                entry = {
+                    "Date/Time": row["Date/Time"],
+                    "Matchup": row["Matchup"],
+                    "Pick": row["Pick"],
+                    "Line": row["Line"],
+                    "Odds (US)": row["Odds (US)"],
+                    "Units": row["Units"],
+                    "Result": "Pending"
+                }
+                # Avoid duplicates
+                if not ((results["Date/Time"] == entry["Date/Time"]) & (results["Matchup"] == entry["Matchup"]) & (results["Pick"] == entry["Pick"])).any():
+                    results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
+    save_results(results)
+
+def update_results_auto():
+    """Automatically fetches results from API-Sports and updates Win/Loss"""
+    results = load_results()
+    if results.empty:
+        return results
+
+    headers = {"x-apisports-key": APISPORTS_KEY}
+
+    # Loop through pending bets
+    for i, row in results.iterrows():
+        if row["Result"] == "Pending":
+            matchup = row["Matchup"]
+            try:
+                # Use API-Sports basketball endpoint as example (extend for other sports)
+                url = "https://v1.basketball.api-sports.io/games?season=2023"
+                r = requests.get(url, headers=headers, timeout=30)
+                if r.status_code == 200:
+                    games = r.json().get("response", [])
+                    for g in games:
+                        home = g.get("teams", {}).get("home", {}).get("name")
+                        away = g.get("teams", {}).get("away", {}).get("name")
+                        winner = g.get("teams", {}).get("winner", {}).get("name", None)
+                        if home and away and matchup == f"{home} vs {away}":
+                            if winner == row["Pick"]:
+                                results.at[i, "Result"] = "Win"
+                            elif winner and winner != row["Pick"]:
+                                results.at[i, "Result"] = "Loss"
+            except Exception:
+                pass
+
+    save_results(results)
+    return results
+
+def show_results():
+    results = update_results_auto()
+    if results.empty:
+        st.info("No bets logged yet.")
+        return
+    st.subheader("📊 Results Tracker (Auto-Updated)")
+    st.dataframe(results, use_container_width=True, hide_index=True)
+
+    total = len(results)
+    wins = (results["Result"] == "Win").sum()
+    losses = (results["Result"] == "Loss").sum()
+    if total > 0:
+        win_pct = (wins / total) * 100
+        st.metric("Overall Win %", f"{win_pct:.1f}% ({wins}-{losses})")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -194,6 +217,45 @@ with st.sidebar:
     top_n = st.slider("Top picks per tab", 3, 20, 10)
     fetch = st.button("Fetch Live Odds")
 
+def best_per_event(df: pd.DataFrame, market_key: str, top_n: int = 10) -> pd.DataFrame:
+    sub = df[df["market"] == market_key].copy()
+    if sub.empty:
+        return pd.DataFrame()
+    sub = sub.loc[sub.groupby("event_id")["conf_market"].idxmax()].copy()
+    sub = sub.sort_values("commence_time", ascending=True).head(top_n)
+    sub["Matchup"] = sub["home_team"] + " vs " + sub["away_team"]
+    out = sub[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
+    out = out.rename(columns={
+        "book": "Sportsbook",
+        "outcome": "Pick",
+        "line": "Line",
+        "odds_american": "Odds (US)",
+        "odds_decimal": "Odds (Dec)",
+        "conf_market": "Confidence"
+    })
+    out["Confidence"] = out["Confidence"].apply(fmt_pct)
+    out["Units"] = sub["conf_market"].apply(assign_units)
+    return out.reset_index(drop=True)
+
+def ai_genius_top(df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    best = df.loc[df.groupby("event_id")["conf_market"].idxmax()].copy()
+    best = best.sort_values("conf_market", ascending=False).head(top_n)
+    best["Matchup"] = best["home_team"] + " vs " + best["away_team"]
+    out = best[["Date/Time", "Matchup", "book", "outcome", "line", "odds_american", "odds_decimal", "conf_market"]]
+    out = out.rename(columns={
+        "book": "Sportsbook",
+        "outcome": "Pick",
+        "line": "Line",
+        "odds_american": "Odds (US)",
+        "odds_decimal": "Odds (Dec)",
+        "conf_market": "Confidence"
+    })
+    out["Confidence"] = out["Confidence"].apply(fmt_pct)
+    out["Units"] = best["conf_market"].apply(assign_units)
+    return out.reset_index(drop=True)
+
 if fetch:
     sport_key = SPORT_OPTIONS[sport_name]
     if isinstance(sport_key, list):
@@ -203,51 +265,38 @@ if fetch:
         raw = fetch_odds(sport_key, regions)
 
     if raw.empty:
-        st.warning("No data returned.")
+        st.warning("No data returned. Try a different sport or check API quota.")
     else:
-        tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Results", "Raw Data"])
+        ml = best_per_event(raw, "h2h", top_n)
+        totals = best_per_event(raw, "totals", top_n)
+        spreads = best_per_event(raw, "spreads", top_n)
+        ai_picks = ai_genius_top(raw, top_n)
+
+        auto_log_picks({"Moneyline": ml, "Totals": totals, "Spreads": spreads, "AI Genius": ai_picks})
+
+        tabs = st.tabs(["🤖 AI Genius Picks", "Moneylines", "Totals", "Spreads", "Raw Data", "📊 Results"])
 
         with tabs[0]:
-            st.subheader("AI Genius — Top Picks")
-            ml = best_per_event(raw, "h2h", top_n)
-            st.dataframe(ml, use_container_width=True, hide_index=True)
-            if not ml.empty:
-                row = ml.iloc[0]
-                if st.button(f"Log Bet: {row['Matchup']} - {row['Pick']}"):
-                    save_bet(row["Date/Time"], row["Matchup"], row["Pick"], row["Odds (US)"], row["Units"])
-                    st.success("Bet logged!")
+            st.subheader("AI Genius — Highest Confidence Picks")
+            st.dataframe(ai_picks, use_container_width=True, hide_index=True)
 
         with tabs[1]:
-            st.subheader("Best Moneylines")
-            t = best_per_event(raw, "h2h", top_n)
-            st.dataframe(t, use_container_width=True, hide_index=True)
+            st.subheader("Best Moneyline per Game")
+            st.dataframe(ml, use_container_width=True, hide_index=True)
 
         with tabs[2]:
-            st.subheader("Best Totals")
-            t = best_per_event(raw, "totals", top_n)
-            st.dataframe(t, use_container_width=True, hide_index=True)
+            st.subheader("Best Totals per Game")
+            st.dataframe(totals, use_container_width=True, hide_index=True)
 
         with tabs[3]:
-            st.subheader("Best Spreads")
-            t = best_per_event(raw, "spreads", top_n)
-            st.dataframe(t, use_container_width=True, hide_index=True)
+            st.subheader("Best Spreads per Game")
+            st.dataframe(spreads, use_container_width=True, hide_index=True)
 
         with tabs[4]:
-            st.subheader("Your Results")
-            bets = load_bets()
-            st.dataframe(bets, use_container_width=True, hide_index=True)
-            st.markdown(f"**Overall Real Win %:** {calc_real_win_pct()}")
-
-            if not bets.empty:
-                index = st.number_input("Enter bet index to update result", min_value=0, max_value=len(bets)-1, step=1)
-                result = st.selectbox("Result", ["Pending", "Win", "Loss"])
-                if st.button("Update Bet Result"):
-                    update_bet_result(index, result)
-                    st.success("Result updated!")
-
-        with tabs[5]:
-            st.subheader("Raw Odds Data")
+            st.subheader("Raw Data")
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
 
+        with tabs[5]:
+            show_results()
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

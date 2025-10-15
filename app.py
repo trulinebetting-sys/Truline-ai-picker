@@ -132,7 +132,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
 def build_consensus(raw: pd.DataFrame) -> pd.DataFrame:
     if raw.empty:
         return raw
-    idx_best = raw.groupby(["event_id", "market", "outcome", "line"])["odds_decimal"].idxmax()
+    idx_best = raw.groupby(["event_id","market","outcome","line"])["odds_decimal"].idxmax()
     best = raw.loc[idx_best, ["event_id","market","outcome","line","odds_american","odds_decimal","book"]]
     best = best.rename(columns={"odds_american":"best_odds_us","odds_decimal":"best_odds_dec","book":"best_book"})
     agg = raw.groupby(["event_id","market","outcome","line"], dropna=False).agg(
@@ -228,13 +228,17 @@ def show_results(sport_name:str):
     total=len(sport_results)
     wins=(sport_results["Result"]=="Win").sum()
     losses=(sport_results["Result"]=="Loss").sum()
+    sport_results["Risked"]=sport_results["Units"].abs()
     sport_results["PnL"]=sport_results.apply(lambda r:r["Units"] if r["Result"]=="Win" else (-r["Units"] if r["Result"]=="Loss" else 0.0),axis=1)
-    bankroll=sport_results["PnL"].sum()
+    units_won=sport_results["PnL"].sum()
+    units_risked=sport_results.loc[sport_results["Result"].isin(["Win","Loss"]),"Risked"].sum()
+    roi=(units_won/units_risked*100.0) if units_risked>0 else 0.0
+    c1,c2,c3=st.columns(3)
     if total>0:
         win_pct=(wins/total)*100
-        c1,c2=st.columns(2)
         c1.metric("Win %",f"{win_pct:.1f}% ({wins}-{losses})")
-        c2.metric("Bankroll (Units)",f"{bankroll:.1f}")
+    c2.metric("Units Won",f"{units_won:.1f}")
+    c3.metric("ROI",f"{roi:.1f}%")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -245,35 +249,64 @@ with st.sidebar:
     top_n=st.slider("Top picks per tab",3,20,10)
     fetch=st.button("Fetch Live Odds")
 
-# Always update results when page loads
-show_results(sport_name)
+def consensus_tables(raw: pd.DataFrame, top_n: int):
+    if raw is None or raw.empty:
+        return (pd.DataFrame(),)*5
+    cons=build_consensus(raw)
+    ml=pick_best_per_event(cons,"h2h",top_n)
+    totals=pick_best_per_event(cons,"totals",top_n)
+    spreads=pick_best_per_event(cons,"spreads",top_n)
+    ai_picks=ai_genius_top(cons,min(top_n,5))
+    return ai_picks,ml,totals,spreads,cons
 
+def confidence_bars(df: pd.DataFrame, title: str):
+    if df is None or df.empty or "Confidence" not in df.columns: return
+    conf_vals=df["Confidence"].str.replace("%","",regex=False).astype(float)
+    lbls=df["Matchup"].astype(str)
+    chart_df=pd.DataFrame({"Confidence":conf_vals.values},index=lbls.values)
+    st.caption(title)
+    st.bar_chart(chart_df)
+
+# ─────────────────────────────────────────────
+# Fetch + Render
+# ─────────────────────────────────────────────
 if fetch:
     sport_key=SPORT_OPTIONS[sport_name]
     raw=pd.concat([fetch_odds(k,regions) for k in sport_key],ignore_index=True) if isinstance(sport_key,list) else fetch_odds(sport_key,regions)
     if raw.empty:
         st.warning("No data returned.")
     else:
-        cons=build_consensus(raw)
-        ml=pick_best_per_event(cons,"h2h",top_n)
-        totals=pick_best_per_event(cons,"totals",top_n)
-        spreads=pick_best_per_event(cons,"spreads",top_n)
-        ai_picks=ai_genius_top(cons,min(top_n,5))
-
-        # Auto-log picks
-        for label,dfp in {"AI Genius":ai_picks,"Moneyline":ml,"Totals":totals,"Spreads":spreads}.items():
-            if not dfp.empty:
-                results=load_results()
-                for _,row in dfp.iterrows():
-                    entry={"Sport":sport_name,"Market":label,"Date/Time":row["Date/Time"],"Matchup":row["Matchup"],"Pick":row["Pick"],"Line":row.get("Line",""),"Odds (US)":row.get("Odds (US)",""),"Units":row.get("Units",1.0),"Result":"Pending"}
-                    dup=((results["Sport"]==entry["Sport"])&(results["Market"]==entry["Market"])&(results["Date/Time"]==entry["Date/Time"])&(results["Matchup"]==entry["Matchup"])&(results["Pick"]==entry["Pick"]))
-                    if not dup.any(): results=pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
-                save_results(results)
+        ai_picks,ml,totals,spreads,cons=consensus_tables(raw,top_n)
 
         tabs=st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
-        with tabs[0]: st.dataframe(ai_picks,use_container_width=True,hide_index=True)
-        with tabs[1]: st.dataframe(ml,use_container_width=True,hide_index=True)
-        with tabs[2]: st.dataframe(totals,use_container_width=True,hide_index=True)
-        with tabs[3]: st.dataframe(spreads,use_container_width=True,hide_index=True)
-        with tabs[4]: st.dataframe(raw.head(200),use_container_width=True,hide_index=True)
-        with tabs[5]: show_results(sport_name)
+
+        with tabs[0]:
+            st.subheader("AI Genius — Highest Consensus Confidence (Top)")
+            st.dataframe(ai_picks,use_container_width=True,hide_index=True)
+            confidence_bars(ai_picks,"Confidence heat — AI Genius")
+
+        with tabs[1]:
+            st.subheader("Best Moneyline per Game (Consensus)")
+            st.dataframe(ml,use_container_width=True,hide_index=True)
+            confidence_bars(ml,"Confidence heat — Moneylines")
+
+        with tabs[2]:
+            st.subheader("Best Totals per Game (Consensus)")
+            st.dataframe(totals,use_container_width=True,hide_index=True)
+            confidence_bars(totals,"Confidence heat — Totals")
+
+        with tabs[3]:
+            st.subheader("Best Spreads per Game (Consensus)")
+            st.dataframe(spreads,use_container_width=True,hide_index=True)
+            confidence_bars(spreads,"Confidence heat — Spreads")
+
+        with tabs[4]:
+            st.subheader("Raw Per-Book Odds (first 200 rows)")
+            st.dataframe(raw.head(200),use_container_width=True,hide_index=True)
+
+        with tabs[5]:
+            show_results(sport_name)
+else:
+    # Default view: just show current results tab with auto update
+    st.info("Pick a sport and click **Fetch Live Odds**")
+    show_results(sport_name)

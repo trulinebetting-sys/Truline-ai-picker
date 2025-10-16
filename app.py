@@ -332,27 +332,33 @@ if fetch:
     else:
         ai_picks,ml,totals,spreads,cons=consensus_tables(raw,top_n)
         auto_log_picks({"AI Genius":ai_picks,"Moneyline":ml,"Totals":totals,"Spreads":spreads},sport_name)
-        tabs=st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
+        tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
+
         with tabs[0]:
             st.subheader("AI Genius — Highest Consensus Confidence (Top)")
-            st.dataframe(ai_picks,use_container_width=True,hide_index=True)
-            confidence_bars(ai_picks,"Confidence heat — AI Genius")
+            st.dataframe(ai_picks, use_container_width=True, hide_index=True)
+            confidence_bars(ai_picks, "Confidence heat — AI Genius")
+
         with tabs[1]:
             st.subheader("Best Moneyline per Game (Consensus)")
-            st.dataframe(ml,use_container_width=True,hide_index=True)
-            confidence_bars(ml,"Confidence heat — Moneylines")
+            st.dataframe(ml, use_container_width=True, hide_index=True)
+            confidence_bars(ml, "Confidence heat — Moneylines")
+
         with tabs[2]:
             st.subheader("Best Totals per Game (Consensus)")
-            st.dataframe(totals,use_container_width=True,hide_index=True)
-            confidence_bars(totals,"Confidence heat — Totals")
+            st.dataframe(totals, use_container_width=True, hide_index=True)
+            confidence_bars(totals, "Confidence heat — Totals")
+
         with tabs[3]:
             st.subheader("Best Spreads per Game (Consensus)")
-            st.dataframe(spreads,use_container_width=True,hide_index=True)
-            confidence_bars(spreads,"Confidence heat — Spreads")
-                with tabs[4]:
+            st.dataframe(spreads, use_container_width=True, hide_index=True)
+            confidence_bars(spreads, "Confidence heat — Spreads")
+
+        with tabs[4]:
             st.subheader("Raw Per-Book Odds (first 200 rows)")
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
             st.caption("Tip: this is the source that feeds the consensus tables.")
+
         with tabs[5]:
             show_results(sport_name)
 else:

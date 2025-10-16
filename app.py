@@ -359,4 +359,4 @@ if fetch:
         with tabs[2]:
             st.subheader("Best Totals per Game (Consensus)")
             st.dataframe(totals, use_container_width=True, hide_index=True)
-            confidence_bars(t
+            confidence_bars(t)

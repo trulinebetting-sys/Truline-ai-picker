@@ -255,18 +255,24 @@ def update_results_auto(sport_name: str):
                     home = g.get("teams", {}).get("home", {}).get("name")
                     away = g.get("teams", {}).get("away", {}).get("name")
                     winner = g.get("teams", {}).get("winner", {}).get("name", None)
-                    if home and away and row["Matchup"] == f"{home} vs {away}":
-                        if winner == row["Pick"]:
+                    # ✅ Loosen match check: substring match
+                    matchup = row["Matchup"].lower()
+                    if home and away and home.lower() in matchup and away.lower() in matchup:
+                        if winner and row["Pick"].lower() in winner.lower():
                             results.at[i, "Result"] = "Win"
-                        elif winner and winner != row["Pick"]:
+                        elif winner:
                             results.at[i, "Result"] = "Loss"
     except Exception:
         pass
     save_results(results)
     return results
 
+def update_all_results():
+    for sport in SPORT_OPTIONS.keys():
+        update_results_auto(sport)
+
 def show_results(sport_name: str):
-    results = update_results_auto(sport_name)
+    results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
     if sport_results.empty:
         st.info(f"No bets logged yet for {sport_name}.")
@@ -321,6 +327,9 @@ def confidence_bars(df: pd.DataFrame, title: str):
 # ─────────────────────────────────────────────
 # Fetch + Render
 # ─────────────────────────────────────────────
+# ✅ Always update results at startup
+update_all_results()
+
 if fetch:
     sport_key = SPORT_OPTIONS[sport_name]
     if isinstance(sport_key, list):
@@ -350,16 +359,4 @@ if fetch:
         with tabs[2]:
             st.subheader("Best Totals per Game (Consensus)")
             st.dataframe(totals, use_container_width=True, hide_index=True)
-            confidence_bars(totals, "Confidence heat — Totals")
-        with tabs[3]:
-            st.subheader("Best Spreads per Game (Consensus)")
-            st.dataframe(spreads, use_container_width=True, hide_index=True)
-            confidence_bars(spreads, "Confidence heat — Spreads")
-        with tabs[4]:
-            st.subheader("Raw Per-Book Odds (first 200 rows)")
-            st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
-            st.caption("Tip: this is the source that feeds the consensus tables.")
-        with tabs[5]:
-            show_results(sport_name)
-else:
-    st.info("Pick a sport and click **Fetch Live Odds**")
+            confidence_bars(t

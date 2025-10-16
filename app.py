@@ -6,7 +6,7 @@ import numpy as np
 import streamlit as st
 
 # ─────────────────────────────────────────────
-# Safe dotenv
+# Safe dotenv (still loads .env but Odds API key is now hard-coded)
 # ─────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
@@ -14,7 +14,8 @@ try:
 except Exception:
     pass
 
-ODDS_API_KEY = os.getenv("ODDS_API_KEY", st.secrets.get("ODDS_API_KEY", ""))
+# ✅ Hard-coded Odds API key
+ODDS_API_KEY = "1d677dc98d978ccc24d9914d835442f1"
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
@@ -114,8 +115,8 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "away_team": away,
                         "book": book,
                         "market": mkey,
-                        "outcome": oc.get("name"),     # Home/Away/Over/Under
-                        "line": oc.get("point"),       # may be None for ML
+                        "outcome": oc.get("name"),
+                        "line": oc.get("point"),
                         "odds_american": oc.get("price"),
                         "odds_decimal": american_to_decimal(oc.get("price")),
                         "conf_book": implied_prob_american(oc.get("price")),
@@ -133,19 +134,12 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
     return df
 
 # ─────────────────────────────────────────────
-# CONSENSUS across books (core new logic)
+# CONSENSUS across books
 # ─────────────────────────────────────────────
 def build_consensus(raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregates per (event_id, market, outcome, line) across all books:
-      - consensus_conf: mean of per-book implied probabilities
-      - books: count of contributing books
-      - best_odds / best_book: best available American odds among books
-    """
     if raw.empty:
         return raw
 
-    # Best odds & best book per outcome
     idx_best = raw.groupby(["event_id", "market", "outcome", "line"])["odds_decimal"].idxmax()
     best = raw.loc[idx_best, ["event_id","market","outcome","line","odds_american","odds_decimal","book"]]
     best = best.rename(columns={"odds_american":"best_odds_us","odds_decimal":"best_odds_dec","book":"best_book"})
@@ -160,8 +154,6 @@ def build_consensus(raw: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
 
     out = agg.merge(best, on=["event_id","market","outcome","line"], how="left")
-
-    # Friendly columns
     out["Matchup"] = out["home_team"] + " vs " + out["away_team"]
     out["Confidence"] = out["consensus_conf"]
     out["Odds (US)"] = out["best_odds_us"]
@@ -169,7 +161,6 @@ def build_consensus(raw: pd.DataFrame) -> pd.DataFrame:
     out["Sportsbook"] = out["best_book"]
     out["Date/Time"] = out["date_time"]
 
-    # Final order
     return out[[
         "event_id","commence_time","Date/Time","Matchup","market","outcome","line",
         "Sportsbook","Odds (US)","Odds (Dec)","Confidence","books"
@@ -179,15 +170,9 @@ def pick_best_per_event(cons_df: pd.DataFrame, market_key: str, top_n: int) -> p
     sub = cons_df[cons_df["market"] == market_key].copy()
     if sub.empty:
         return pd.DataFrame()
-
-    # One pick per game: take the outcome with highest consensus confidence
     best_idx = sub.groupby("event_id")["Confidence"].idxmax()
     sub = sub.loc[best_idx].copy()
-
-    # Sort soonest games first
     sub = sub.sort_values("commence_time", ascending=True).head(top_n)
-
-    # Presentable columns
     out = sub[["Date/Time","Matchup","Sportsbook","outcome","line","Odds (US)","Odds (Dec)","Confidence","Books"]].copy()
     out = out.rename(columns={"outcome":"Pick","line":"Line"})
     out["Confidence"] = out["Confidence"].apply(fmt_pct)
@@ -197,13 +182,11 @@ def pick_best_per_event(cons_df: pd.DataFrame, market_key: str, top_n: int) -> p
 def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     if cons_df.empty:
         return pd.DataFrame()
-    # Build the three markets, then take top overall by confidence
     frames = []
     for m in ["h2h","totals","spreads"]:
-        t = pick_best_per_event(cons_df, m, top_n*3)  # collect more, we'll re-rank globally
+        t = pick_best_per_event(cons_df, m, top_n*3)
         if not t.empty:
             t["Market"] = m
-            # Bring back numeric confidence for global ranking
             t["_C"] = t["Confidence"].str.replace("%","",regex=False).astype(float)
             frames.append(t)
     if not frames:
@@ -211,117 +194,6 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     allp = pd.concat(frames, ignore_index=True)
     allp = allp.sort_values("_C", ascending=False).drop(columns=["_C"]).head(top_n)
     return allp.reset_index(drop=True)
-
-# ─────────────────────────────────────────────
-# Results tracking + bankroll + ROI
-# ─────────────────────────────────────────────
-RESULTS_FILE = "bets.csv"
-
-def load_results() -> pd.DataFrame:
-    if os.path.exists(RESULTS_FILE):
-        df = pd.read_csv(RESULTS_FILE)
-        if "Sport" not in df.columns: df["Sport"] = "Unknown"
-        if "Market" not in df.columns: df["Market"] = "Unknown"
-        return df
-    return pd.DataFrame(columns=[
-        "Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"
-    ])
-
-def save_results(df: pd.DataFrame):
-    df.to_csv(RESULTS_FILE, index=False)
-
-def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
-    """
-    dfs keys should be market labels: "Moneyline","Totals","Spreads","AI Genius"
-    """
-    results = load_results()
-    for market_label, picks in dfs.items():
-        if picks is None or picks.empty:
-            continue
-        for _, row in picks.iterrows():
-            entry = {
-                "Sport": sport_name,
-                "Market": market_label,
-                "Date/Time": row.get("Date/Time",""),
-                "Matchup": row.get("Matchup",""),
-                "Pick": row.get("Pick",""),
-                "Line": row.get("Line",""),
-                "Odds (US)": row.get("Odds (US)",""),
-                "Units": row.get("Units", 1.0),
-                "Result": "Pending"
-            }
-            dup_mask = (
-                (results["Sport"] == entry["Sport"]) &
-                (results["Market"] == entry["Market"]) &
-                (results["Date/Time"] == entry["Date/Time"]) &
-                (results["Matchup"] == entry["Matchup"]) &
-                (results["Pick"] == entry["Pick"])
-            )
-            if not dup_mask.any():
-                results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
-    save_results(results)
-
-def update_results_auto(sport_name: str):
-    results = load_results()
-    if results.empty: return results
-
-    headers = {"x-apisports-key": APISPORTS_KEY}
-    url = SPORT_API_ENDPOINTS.get(sport_name)
-    if not url: return results
-
-    sport_results = results[(results["Sport"] == sport_name) & (results["Result"] == "Pending")]
-    if sport_results.empty: return results
-
-    try:
-        r = requests.get(url, headers=headers, timeout=30)
-        if r.status_code == 200:
-            games = r.json().get("response", [])
-            for i, row in sport_results.iterrows():
-                for g in games:
-                    home = g.get("teams", {}).get("home", {}).get("name")
-                    away = g.get("teams", {}).get("away", {}).get("name")
-                    winner = g.get("teams", {}).get("winner", {}).get("name", None)
-                    if home and away and row["Matchup"] == f"{home} vs {away}":
-                        if winner == row["Pick"]:
-                            results.at[i, "Result"] = "Win"
-                        elif winner and winner != row["Pick"]:
-                            results.at[i, "Result"] = "Loss"
-    except Exception:
-        pass
-
-    save_results(results)
-    return results
-
-def show_results(sport_name: str):
-    results = update_results_auto(sport_name)
-    sport_results = results[results["Sport"] == sport_name].copy()
-
-    if sport_results.empty:
-        st.info(f"No bets logged yet for {sport_name}.")
-        return
-
-    st.subheader(f"📊 Results — {sport_name}")
-    st.dataframe(sport_results, use_container_width=True, hide_index=True)
-
-    total = len(sport_results)
-    wins = (sport_results["Result"] == "Win").sum()
-    losses = (sport_results["Result"] == "Loss").sum()
-
-    # Units PnL and ROI
-    sport_results["Risked"] = sport_results["Units"].abs()
-    sport_results["PnL"] = sport_results.apply(
-        lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0.0), axis=1
-    )
-    units_won = sport_results["PnL"].sum()
-    units_risked = sport_results.loc[sport_results["Result"].isin(["Win","Loss"]), "Risked"].sum()
-    roi = (units_won / units_risked * 100.0) if units_risked > 0 else 0.0
-
-    c1, c2, c3 = st.columns(3)
-    if total > 0:
-        win_pct = (wins / total) * 100
-        c1.metric("Win %", f"{win_pct:.1f}% ({wins}-{losses})")
-    c2.metric("Units Won", f"{units_won:.1f}")
-    c3.metric("ROI", f"{roi:.1f}%")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -332,30 +204,6 @@ with st.sidebar:
     top_n = st.slider("Top picks per tab", 3, 20, 10)
     fetch = st.button("Fetch Live Odds")
 
-def consensus_tables(raw: pd.DataFrame, top_n: int):
-    """Returns (ai_picks, ml, totals, spreads, consensus_df)"""
-    if raw is None or raw.empty:
-        return (pd.DataFrame(),)*5
-    cons = build_consensus(raw)
-    ml = pick_best_per_event(cons, "h2h", top_n)
-    totals = pick_best_per_event(cons, "totals", top_n)
-    spreads = pick_best_per_event(cons, "spreads", top_n)
-    ai_picks = ai_genius_top(cons, min(top_n, 5))
-    return ai_picks, ml, totals, spreads, cons
-
-def confidence_bars(df: pd.DataFrame, title: str):
-    if df is None or df.empty or "Confidence" not in df.columns: 
-        return
-    # Numeric vector for bar chart
-    conf_vals = df["Confidence"].str.replace("%","",regex=False).astype(float)
-    lbls = df["Matchup"].astype(str)
-    chart_df = pd.DataFrame({"Confidence": conf_vals.values}, index=lbls.values)
-    st.caption(title)
-    st.bar_chart(chart_df)
-
-# ─────────────────────────────────────────────
-# Fetch + Render
-# ─────────────────────────────────────────────
 if fetch:
     sport_key = SPORT_OPTIONS[sport_name]
     if isinstance(sport_key, list):
@@ -367,44 +215,32 @@ if fetch:
     if raw.empty:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
-        ai_picks, ml, totals, spreads, cons = consensus_tables(raw, top_n)
+        cons = build_consensus(raw)
+        ml = pick_best_per_event(cons, "h2h", top_n)
+        totals = pick_best_per_event(cons, "totals", top_n)
+        spreads = pick_best_per_event(cons, "spreads", top_n)
+        ai_picks = ai_genius_top(cons, min(top_n, 5))
 
-        # Auto-log by sport + market
-        auto_log_picks({
-            "AI Genius": ai_picks,
-            "Moneyline": ml,
-            "Totals": totals,
-            "Spreads": spreads
-        }, sport_name)
-
-        tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
+        tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data"])
 
         with tabs[0]:
             st.subheader("AI Genius — Highest Consensus Confidence (Top)")
             st.dataframe(ai_picks, use_container_width=True, hide_index=True)
-            confidence_bars(ai_picks, "Confidence heat — AI Genius")
 
         with tabs[1]:
             st.subheader("Best Moneyline per Game (Consensus)")
             st.dataframe(ml, use_container_width=True, hide_index=True)
-            confidence_bars(ml, "Confidence heat — Moneylines")
 
         with tabs[2]:
             st.subheader("Best Totals per Game (Consensus)")
             st.dataframe(totals, use_container_width=True, hide_index=True)
-            confidence_bars(totals, "Confidence heat — Totals")
 
         with tabs[3]:
             st.subheader("Best Spreads per Game (Consensus)")
             st.dataframe(spreads, use_container_width=True, hide_index=True)
-            confidence_bars(spreads, "Confidence heat — Spreads")
 
         with tabs[4]:
             st.subheader("Raw Per-Book Odds (first 200 rows)")
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
-            st.caption("Tip: this is the source that feeds the consensus tables.")
-
-        with tabs[5]:
-            show_results(sport_name)
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

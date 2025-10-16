@@ -359,4 +359,16 @@ if fetch:
         with tabs[2]:
             st.subheader("Best Totals per Game (Consensus)")
             st.dataframe(totals, use_container_width=True, hide_index=True)
-            confidence_bars(t)
+            confidence_bars(totals, "Confidence heat — Totals")
+        with tabs[3]:
+            st.subheader("Best Spreads per Game (Consensus)")
+            st.dataframe(spreads, use_container_width=True, hide_index=True)
+            confidence_bars(spreads, "Confidence heat — Spreads")
+        with tabs[4]:
+            st.subheader("Raw Per-Book Odds (first 200 rows)")
+            st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
+            st.caption("Tip: this is the source that feeds the consensus tables.")
+        with tabs[5]:
+            show_results(sport_name)
+else:
+    st.info("Pick a sport and click **Fetch Live Odds**")

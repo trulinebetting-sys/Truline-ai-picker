@@ -224,8 +224,6 @@ def show_results(sport_name: str):
         return
 
     st.subheader(f"📊 Results — {sport_name}")
-    st.dataframe(sport_results,use_container_width=True,hide_index=True)
-
     total = len(sport_results)
     wins = (sport_results["Result"] == "Win").sum()
     losses = (sport_results["Result"] == "Loss").sum()
@@ -243,32 +241,42 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # Manual editor with one save button
-    st.subheader(f"✍️ Manual Result Editor — {sport_name}")
-    filtered = results[(results["Sport"] == sport_name) & (results["Result"] == "Pending")]
+    # ─────────────────────────────────────────────
+    # Tabs inside Results: Pending vs Completed
+    # ─────────────────────────────────────────────
+    subtabs = st.tabs(["⏳ Pending Picks", "✅ Completed Picks"])
+    with subtabs[0]:
+        pending = sport_results[sport_results["Result"] == "Pending"]
+        if pending.empty:
+            st.success("No pending picks.")
+        else:
+            st.subheader("✍️ Manual Result Editor")
+            updated_results = {}
+            for orig_idx, row in pending.iterrows():
+                c1, c2 = st.columns([4,2])
+                with c1:
+                    line_info = f" ({row['Line']})" if str(row['Line']).strip() != "" else ""
+                    st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
+                with c2:
+                    new_result = st.selectbox(
+                        "Set Result",
+                        ["Pending","Win","Loss"],
+                        index=["Pending","Win","Loss"].index(str(row.get("Result","Pending"))),
+                        key=f"res_{sport_name}_{orig_idx}"
+                    )
+                    updated_results[orig_idx] = new_result
+            if st.button("💾 Save All Changes"):
+                for idx, new_result in updated_results.items():
+                    results.at[idx, "Result"] = new_result
+                save_results(results)
+                st.success("All changes saved ✅")
 
-    updated_results = {}
-    for orig_idx, row in filtered.iterrows():
-        c1, c2 = st.columns([4,2])
-        with c1:
-            line_info = f" ({row['Line']})" if pd.notna(row['Line']) and str(row['Line']).strip() != "" else ""
-            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
-        with c2:
-            new_result = st.selectbox(
-                "Set Result",
-                ["Pending","Win","Loss"],
-                index=["Pending","Win","Loss"].index(str(row.get("Result","Pending"))),
-                key=f"res_{sport_name}_{orig_idx}"
-            )
-            updated_results[orig_idx] = new_result
-
-    if st.button("💾 Save All Changes"):
-        for idx, new_result in updated_results.items():
-            results.at[idx, "Result"] = new_result
-        save_results(results)
-        st.success("All changes saved ✅")
-        # 👇 Refresh data without redirect
-        st.session_state[f"{sport_name}_results"] = results
+    with subtabs[1]:
+        completed = sport_results[sport_results["Result"].isin(["Win","Loss"])]
+        if completed.empty:
+            st.info("No completed picks yet.")
+        else:
+            st.dataframe(completed, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

@@ -94,8 +94,8 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         "markets": markets,
         "oddsFormat": "american"
     })
-    if not data: return pd.DataFrame()
-
+    if not data:
+        return pd.DataFrame()
     rows = []
     for ev in data:
         event_id = ev.get("id")
@@ -120,7 +120,8 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "conf_book": implied_prob_american(oc.get("price")),
                     })
     df = pd.DataFrame(rows)
-    if df.empty: return df
+    if df.empty:
+        return df
     df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
     if pd.api.types.is_datetime64tz_dtype(df["commence_time"]):
         df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
@@ -183,7 +184,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     return allp.reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Results tracking (event_id based)
+# Results tracking + ROI (with event_id)
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -233,26 +234,26 @@ def update_results_auto(sport_name: str):
         r = requests.get(url, headers=headers, timeout=30)
         if r.status_code == 200:
             games = r.json().get("response", [])
-            for g in games:
-                game_id = str(g.get("id", ""))
-                if game_id in sport_results["event_id"].values:
-                    scores = g.get("scores", {})
-                    home = g.get("teams", {}).get("home", {}).get("name")
-                    away = g.get("teams", {}).get("away", {}).get("name")
-                    home_score = scores.get("home", {}).get("total")
-                    away_score = scores.get("away", {}).get("total")
-                    winner = None
-                    if home_score is not None and away_score is not None:
-                        if home_score > away_score: winner = home
-                        elif away_score > home_score: winner = away
-                        else: winner = "Draw"
-                    idxs = results[(results["event_id"] == game_id) & (results["Sport"] == sport_name) & (results["Result"] == "Pending")].index
-                    for i in idxs:
-                        pick = results.at[i,"Pick"]
-                        if winner and pick == winner:
-                            results.at[i,"Result"] = "Win"
-                        elif winner and winner != "Draw":
-                            results.at[i,"Result"] = "Loss"
+            for i, row in sport_results.iterrows():
+                for g in games:
+                    game_id = str(g.get("id"))
+                    if row["event_id"] == game_id:
+                        home = g.get("teams", {}).get("home", {}).get("name")
+                        away = g.get("teams", {}).get("away", {}).get("name")
+                        scores = g.get("scores", {})
+                        home_score = scores.get("home", {}).get("total")
+                        away_score = scores.get("away", {}).get("total")
+                        if home_score is not None and away_score is not None:
+                            if home_score > away_score:
+                                winner = home
+                            elif away_score > home_score:
+                                winner = away
+                            else:
+                                winner = "Draw"
+                            if row["Pick"] == winner:
+                                results.at[i, "Result"] = "Win"
+                            elif winner != "Draw":
+                                results.at[i, "Result"] = "Loss"
     except Exception: pass
     save_results(results)
     return results
@@ -338,8 +339,8 @@ if fetch:
             confidence_bars(totals,"Confidence heat — Totals")
         with tabs[3]:
             st.subheader("Best Spreads per Game (Consensus)")
-            st.dataframe(spreads, use_container_width=True, hide_index=True)
-            confidence_bars(spreads, "Confidence heat — Spreads")
+            st.dataframe(spreads,use_container_width=True,hide_index=True)
+            confidence_bars(spreads,"Confidence heat — Spreads")
         with tabs[4]:
             st.subheader("Raw Per-Book Odds (first 200 rows)")
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)

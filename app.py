@@ -186,7 +186,7 @@ def load_results() -> pd.DataFrame:
         return df
     return pd.DataFrame(columns=["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
-def save_results(df: pd.DataFrame): 
+def save_results(df: pd.DataFrame):
     df.to_csv(RESULTS_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
@@ -215,6 +215,9 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
+# ─────────────────────────────────────────────
+# Results UI (now independent of "fetch")
+# ─────────────────────────────────────────────
 def show_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
@@ -242,11 +245,11 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # ─────────────────────────────────────────────
-    # Manual result editor — no rerun
-    # ─────────────────────────────────────────────
+    # Manual result editor — stays on page (no rerun bounce)
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
-    for i, row in sport_results.iterrows():
+    # Use original index to write back correctly
+    filtered = results[results["Sport"] == sport_name]
+    for orig_idx, row in filtered.iterrows():
         c1, c2 = st.columns([4,2])
         with c1:
             st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}")
@@ -254,23 +257,38 @@ def show_results(sport_name: str):
             new_result = st.selectbox(
                 "Set Result",
                 ["Pending","Win","Loss"],
-                index=["Pending","Win","Loss"].index(row["Result"]),
-                key=f"res_{sport_name}_{i}"
+                index=["Pending","Win","Loss"].index(str(row.get("Result","Pending"))),
+                key=f"res_{sport_name}_{orig_idx}"
             )
-            if st.button("Save", key=f"save_{sport_name}_{i}"):
-                results.at[i, "Result"] = new_result
+            if st.button("Save", key=f"save_{sport_name}_{orig_idx}"):
+                results.at[orig_idx, "Result"] = new_result
                 save_results(results)
                 st.success("Result updated ✅")
 
 # ─────────────────────────────────────────────
-# Sidebar + Main
+# Sidebar + session defaults
 # ─────────────────────────────────────────────
 with st.sidebar:
-    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
-    regions = st.text_input("Regions", value=DEFAULT_REGIONS)
-    top_n = st.slider("Top picks per tab", 3, 20, 10)
-    fetch = st.button("Fetch Live Odds")
+    # session defaults to keep UI persistent across re-runs
+    if "ai_picks" not in st.session_state:
+        st.session_state.ai_picks = pd.DataFrame()
+    if "ml" not in st.session_state:
+        st.session_state.ml = pd.DataFrame()
+    if "totals" not in st.session_state:
+        st.session_state.totals = pd.DataFrame()
+    if "spreads" not in st.session_state:
+        st.session_state.spreads = pd.DataFrame()
+    if "raw" not in st.session_state:
+        st.session_state.raw = pd.DataFrame()
 
+    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0, key="sport_select")
+    regions = st.text_input("Regions", value=DEFAULT_REGIONS, key="regions_input")
+    top_n = st.slider("Top picks per tab", 3, 20, 10, key="topn_slider")
+    fetch = st.button("Fetch Live Odds", key="fetch_button")
+
+# ─────────────────────────────────────────────
+# Small helpers
+# ─────────────────────────────────────────────
 def consensus_tables(raw: pd.DataFrame, top_n: int):
     if raw is None or raw.empty: return (pd.DataFrame(),)*5
     cons = build_consensus(raw)
@@ -289,7 +307,7 @@ def confidence_bars(df: pd.DataFrame,title: str):
     st.bar_chart(chart_df)
 
 # ─────────────────────────────────────────────
-# Fetch + Render
+# Fetch and store to session (once)
 # ─────────────────────────────────────────────
 if fetch:
     sport_key = SPORT_OPTIONS[sport_name]
@@ -298,33 +316,64 @@ if fetch:
         raw = pd.concat([p for p in parts if not p.empty],ignore_index=True) if parts else pd.DataFrame()
     else:
         raw = fetch_odds(sport_key,regions)
+
     if raw.empty:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
         ai_picks,ml,totals,spreads,cons = consensus_tables(raw,top_n)
+        # Save into session so tabs persist across re-runs
+        st.session_state.raw = raw
+        st.session_state.ai_picks = ai_picks
+        st.session_state.ml = ml
+        st.session_state.totals = totals
+        st.session_state.spreads = spreads
+        # Auto-log picks
         auto_log_picks({"AI Genius": ai_picks,"Moneyline": ml,"Totals": totals,"Spreads": spreads}, sport_name)
-        tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
-        with tabs[0]:
-            st.subheader("AI Genius — Highest Consensus Confidence (Top)")
-            st.dataframe(ai_picks,use_container_width=True,hide_index=True)
-            confidence_bars(ai_picks,"Confidence heat — AI Genius")
-        with tabs[1]:
-            st.subheader("Best Moneyline per Game (Consensus)")
-            st.dataframe(ml,use_container_width=True,hide_index=True)
-            confidence_bars(ml,"Confidence heat — Moneylines")
-        with tabs[2]:
-            st.subheader("Best Totals per Game (Consensus)")
-            st.dataframe(totals,use_container_width=True,hide_index=True)
-            confidence_bars(totals,"Confidence heat — Totals")
-        with tabs[3]:
-            st.subheader("Best Spreads per Game (Consensus)")
-            st.dataframe(spreads,use_container_width=True,hide_index=True)
-            confidence_bars(spreads,"Confidence heat — Spreads")
-        with tabs[4]:
-            st.subheader("Raw Per-Book Odds (first 200 rows)")
-            st.dataframe(raw.head(200), use_container_width=True, hide_index=True)
-            st.caption("Tip: this is the source that feeds the consensus tables.")
-        with tabs[5]:
-            show_results(sport_name)
-else:
-    st.info("Pick a sport and click **Fetch Live Odds**")
+
+# ─────────────────────────────────────────────
+# Always render tabs using session data
+# ─────────────────────────────────────────────
+tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
+
+with tabs[0]:
+    st.subheader("AI Genius — Highest Consensus Confidence (Top)")
+    if st.session_state.ai_picks.empty:
+        st.info("No picks yet. Click **Fetch Live Odds** to populate.")
+    else:
+        st.dataframe(st.session_state.ai_picks,use_container_width=True,hide_index=True)
+        confidence_bars(st.session_state.ai_picks,"Confidence heat — AI Genius")
+
+with tabs[1]:
+    st.subheader("Best Moneyline per Game (Consensus)")
+    if st.session_state.ml.empty:
+        st.info("No moneylines loaded yet.")
+    else:
+        st.dataframe(st.session_state.ml,use_container_width=True,hide_index=True)
+        confidence_bars(st.session_state.ml,"Confidence heat — Moneylines")
+
+with tabs[2]:
+    st.subheader("Best Totals per Game (Consensus)")
+    if st.session_state.totals.empty:
+        st.info("No totals loaded yet.")
+    else:
+        st.dataframe(st.session_state.totals,use_container_width=True,hide_index=True)
+        confidence_bars(st.session_state.totals,"Confidence heat — Totals")
+
+with tabs[3]:
+    st.subheader("Best Spreads per Game (Consensus)")
+    if st.session_state.spreads.empty:
+        st.info("No spreads loaded yet.")
+    else:
+        st.dataframe(st.session_state.spreads,use_container_width=True,hide_index=True)
+        confidence_bars(st.session_state.spreads,"Confidence heat — Spreads")
+
+with tabs[4]:
+    st.subheader("Raw Per-Book Odds (first 200 rows)")
+    if st.session_state.raw.empty:
+        st.info("No raw data yet. Click **Fetch Live Odds**.")
+    else:
+        st.dataframe(st.session_state.raw.head(200), use_container_width=True, hide_index=True)
+        st.caption("Tip: this is the source that feeds the consensus tables.")
+
+with tabs[5]:
+    show_results(sport_name)

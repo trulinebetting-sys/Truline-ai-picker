@@ -243,9 +243,11 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # Manual editor with line info
+    # Manual editor with one save button
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
-    filtered = results[results["Sport"] == sport_name]
+    filtered = results[(results["Sport"] == sport_name) & (results["Result"] == "Pending")]
+
+    updated_results = {}
     for orig_idx, row in filtered.iterrows():
         c1, c2 = st.columns([4,2])
         with c1:
@@ -258,10 +260,14 @@ def show_results(sport_name: str):
                 index=["Pending","Win","Loss"].index(str(row.get("Result","Pending"))),
                 key=f"res_{sport_name}_{orig_idx}"
             )
-            if st.button("Save", key=f"save_{sport_name}_{orig_idx}"):
-                results.at[orig_idx, "Result"] = new_result
-                save_results(results)
-                st.success("Result updated ✅")
+            updated_results[orig_idx] = new_result
+
+    if st.button("💾 Save All Changes"):
+        for idx, new_result in updated_results.items():
+            results.at[idx, "Result"] = new_result
+        save_results(results)
+        st.success("All changes saved ✅")
+        st.experimental_rerun()
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

@@ -267,7 +267,8 @@ def show_results(sport_name: str):
             results.at[idx, "Result"] = new_result
         save_results(results)
         st.success("All changes saved ✅")
-        st.experimental_rerun()
+        # 👇 Refresh data without redirect
+        st.session_state[f"{sport_name}_results"] = results
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

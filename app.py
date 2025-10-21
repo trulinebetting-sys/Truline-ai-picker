@@ -20,12 +20,8 @@ APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
 SOCCER_KEYS = [
-    "soccer_epl",
-    "soccer_spain_la_liga",
-    "soccer_italy_serie_a",
-    "soccer_france_ligue_one",
-    "soccer_germany_bundesliga",
-    "soccer_uefa_champions_league",
+    "soccer_epl","soccer_spain_la_liga","soccer_italy_serie_a",
+    "soccer_france_ligue_one","soccer_germany_bundesliga","soccer_uefa_champions_league"
 ]
 
 SPORT_OPTIONS = {
@@ -96,13 +92,6 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
             for mk in bk.get("markets", []):
                 mkey = mk.get("key")
                 for oc in mk.get("outcomes", []):
-                    pick_name = oc.get("name")
-                    line = oc.get("point")
-                    # Make spreads/totals clearer
-                    if mkey == "spreads" and line is not None:
-                        pick_name = f"{pick_name} ({line:+})"
-                    if mkey == "totals" and line is not None:
-                        pick_name = f"{pick_name} ({line})"
                     rows.append({
                         "event_id": event_id,
                         "commence_time": commence,
@@ -110,8 +99,8 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "away_team": away,
                         "book": book,
                         "market": mkey,
-                        "outcome": pick_name,
-                        "line": line,
+                        "outcome": oc.get("name"),
+                        "line": oc.get("point"),
                         "odds_american": oc.get("price"),
                         "odds_decimal": american_to_decimal(oc.get("price")),
                         "conf_book": implied_prob_american(oc.get("price")),
@@ -181,7 +170,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     return allp.reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Results tracking + ROI
+# Results tracking + ROI + Manual Editor
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -190,13 +179,6 @@ def load_results() -> pd.DataFrame:
         df = pd.read_csv(RESULTS_FILE)
         if "Sport" not in df.columns: df["Sport"] = "Unknown"
         if "Market" not in df.columns: df["Market"] = "Unknown"
-
-        # 🔧 Deduplicate automatically
-        df = df.drop_duplicates(
-            subset=["Sport","Market","Date/Time","Matchup","Pick"],
-            keep="last"
-        ).reset_index(drop=True)
-
         return df
     return pd.DataFrame(columns=["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
@@ -249,6 +231,7 @@ def show_results(sport_name: str):
     units_won = sport_results["PnL"].sum()
     units_risked = sport_results.loc[sport_results["Result"].isin(["Win","Loss"]), "Risked"].sum()
     roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
+
     c1,c2,c3 = st.columns(3)
     if total>0:
         win_pct = (wins/total)*100
@@ -257,54 +240,54 @@ def show_results(sport_name: str):
     c3.metric("ROI",f"{roi:.1f}%")
 
     # ─────────────────────────────────────────────
-    # Manual result editor
+    # Manual editor for Pending picks
     # ─────────────────────────────────────────────
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     editable = sport_results[sport_results["Result"] == "Pending"].copy()
-    if editable.empty:
-        st.caption("No pending picks for this sport.")
-    else:
-        updated = {}
+
+    with st.form("results_form"):
+        updated_results = {}
         for i, row in editable.iterrows():
-            c1, c2 = st.columns([4,2])
-            with c1:
-                st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}")
-            with c2:
-                updated[i] = st.selectbox(
-                    "Set Result",
-                    ["Pending","Win","Loss"],
-                    index=["Pending","Win","Loss"].index(row["Result"]),
-                    key=f"res_{sport_name}_{i}"
-                )
-        if st.button("Save Results"):
-            for i, res in updated.items():
-                results.at[i, "Result"] = res
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']} {row['Line'] if pd.notna(row['Line']) else ''}")
+            new_result = st.selectbox(
+                f"Result for {row['Matchup']} ({row['Market']})",
+                ["Pending","Win","Loss"],
+                index=["Pending","Win","Loss"].index(row["Result"]),
+                key=f"form_res_{i}"
+            )
+            updated_results[i] = new_result
+
+        submitted = st.form_submit_button("Save Pending Picks")
+        if submitted:
+            for i, new_res in updated_results.items():
+                results.at[i, "Result"] = new_res
             save_results(results)
-            st.success("Results saved!")
+            st.success("Pending picks updated successfully!")
 
     # ─────────────────────────────────────────────
-    # Completed Picks Tab
+    # Completed Picks Editor (Win/Loss)
     # ─────────────────────────────────────────────
     st.subheader(f"✅ Completed Picks — {sport_name}")
-    completed = sport_results[sport_results["Result"].isin(["Win","Loss"])]
-    if completed.empty:
-        st.caption("No completed picks yet.")
-    else:
+    completed = sport_results[sport_results["Result"].isin(["Win","Loss"])].copy()
+
+    with st.form("completed_form"):
+        updated_completed = {}
         for i, row in completed.iterrows():
-            c1, c2 = st.columns([4,2])
-            with c1:
-                st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']} — Result: {row['Result']}")
-            with c2:
-                new_result = st.selectbox(
-                    "Edit Result",
-                    ["Win","Loss"],
-                    index=["Win","Loss"].index(row["Result"]),
-                    key=f"edit_{sport_name}_{i}"
-                )
-                if st.button("Update", key=f"update_{sport_name}_{i}"):
-                    results.at[i, "Result"] = new_result
-                    save_results(results)
-                    st.success("Completed pick updated!")
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']} {row['Line'] if pd.notna(row['Line']) else ''} — Current: {row['Result']}")
+            new_result = st.selectbox(
+                f"Change Result for {row['Matchup']} ({row['Market']})",
+                ["Win","Loss"],
+                index=["Win","Loss"].index(row["Result"]) if row["Result"] in ["Win","Loss"] else 0,
+                key=f"comp_res_{i}"
+            )
+            updated_completed[i] = new_result
+
+        submitted_comp = st.form_submit_button("Save Completed Picks")
+        if submitted_comp:
+            for i, new_res in updated_completed.items():
+                results.at[i, "Result"] = new_res
+            save_results(results)
+            st.success("Completed picks updated successfully!")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -362,8 +345,8 @@ if fetch:
             confidence_bars(totals,"Confidence heat — Totals")
         with tabs[3]:
             st.subheader("Best Spreads per Game (Consensus)")
-            st.dataframe(spreads, use_container_width=True, hide_index=True)
-            confidence_bars(spreads, "Confidence heat — Spreads")
+            st.dataframe(spreads,use_container_width=True,hide_index=True)
+            confidence_bars(spreads,"Confidence heat — Spreads")
         with tabs[4]:
             st.subheader("Raw Per-Book Odds (first 200 rows)")
             st.dataframe(raw.head(200), use_container_width=True, hide_index=True)

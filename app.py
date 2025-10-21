@@ -241,9 +241,7 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # ─────────────────────────────────────────────
-    # Tabs inside Results: Pending vs Completed
-    # ─────────────────────────────────────────────
+    # Tabs inside Results
     subtabs = st.tabs(["⏳ Pending Picks", "✅ Completed Picks"])
     with subtabs[0]:
         pending = sport_results[sport_results["Result"] == "Pending"]
@@ -251,22 +249,27 @@ def show_results(sport_name: str):
             st.success("No pending picks.")
         else:
             st.subheader("✍️ Manual Result Editor")
-            updated_results = {}
+
+            if "manual_updates" not in st.session_state:
+                st.session_state.manual_updates = {}
+
             for orig_idx, row in pending.iterrows():
                 c1, c2 = st.columns([4,2])
                 with c1:
                     line_info = f" ({row['Line']})" if str(row['Line']).strip() != "" else ""
                     st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
                 with c2:
+                    default_val = st.session_state.manual_updates.get(orig_idx, row["Result"])
                     new_result = st.selectbox(
                         "Set Result",
                         ["Pending","Win","Loss"],
-                        index=["Pending","Win","Loss"].index(str(row.get("Result","Pending"))),
+                        index=["Pending","Win","Loss"].index(str(default_val)),
                         key=f"res_{sport_name}_{orig_idx}"
                     )
-                    updated_results[orig_idx] = new_result
-            if st.button("💾 Save All Changes"):
-                for idx, new_result in updated_results.items():
+                    st.session_state.manual_updates[orig_idx] = new_result
+
+            if st.button("💾 Save All Changes", key=f"saveall_{sport_name}"):
+                for idx, new_result in st.session_state.manual_updates.items():
                     results.at[idx, "Result"] = new_result
                 save_results(results)
                 st.success("All changes saved ✅")

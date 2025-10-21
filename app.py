@@ -224,26 +224,27 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
-# ✅ NEW: Manual update function
-def manual_update_results():
+# ✅ Manual update function (per sport only)
+def manual_update_results(sport_name: str):
     results = load_results()
-    if results.empty:
-        st.info("No results logged yet.")
+    sport_results = results[results["Sport"] == sport_name].copy()
+    if sport_results.empty:
+        st.info(f"No results logged yet for {sport_name}.")
         return
-    st.subheader("✍️ Manual Result Editor")
-    pending = results[results["Result"] == "Pending"].copy()
+    st.subheader(f"✍️ Manual Result Editor — {sport_name}")
+    pending = sport_results[sport_results["Result"] == "Pending"].copy()
     if pending.empty:
-        st.success("No pending bets. All results are updated ✅")
+        st.success(f"No pending bets for {sport_name}. All results are updated ✅")
         return
     for i, row in pending.iterrows():
         col1, col2, col3 = st.columns([4, 2, 2])
         with col1:
-            st.write(f"{row['Sport']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}")
+            st.write(f"{row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}")
         with col2:
-            choice = st.selectbox("Set Result", ["Pending", "Win", "Loss"], index=0, key=f"res_{i}")
+            choice = st.selectbox("Set Result", ["Pending", "Win", "Loss"], index=0, key=f"{sport_name}_res_{i}")
         with col3:
-            if st.button("Save", key=f"save_{i}"):
-                results.at[i, "Result"] = choice
+            if st.button("Save", key=f"{sport_name}_save_{i}"):
+                results.loc[results.index == row.name, "Result"] = choice
                 save_results(results)
                 st.experimental_rerun()
 
@@ -253,27 +254,32 @@ def show_results(sport_name: str):
     if sport_results.empty:
         st.info(f"No bets logged yet for {sport_name}.")
         return
+
     st.subheader(f"📊 Results — {sport_name}")
-    st.dataframe(sport_results,use_container_width=True,hide_index=True)
+    st.dataframe(sport_results, use_container_width=True, hide_index=True)
+
     total = len(sport_results)
     wins = (sport_results["Result"] == "Win").sum()
     losses = (sport_results["Result"] == "Loss").sum()
+
     sport_results["Risked"] = sport_results["Units"].abs()
     sport_results["PnL"] = sport_results.apply(
         lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0.0), axis=1
     )
+
     units_won = sport_results["PnL"].sum()
     units_risked = sport_results.loc[sport_results["Result"].isin(["Win","Loss"]), "Risked"].sum()
-    roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
+    roi = (units_won/units_risked*100.0) if units_risked > 0 else 0.0
+
     c1,c2,c3 = st.columns(3)
     if total>0:
         win_pct = (wins/total)*100
-        c1.metric("Win %",f"{win_pct:.1f}% ({wins}-{losses})")
-    c2.metric("Units Won",f"{units_won:.1f}")
-    c3.metric("ROI",f"{roi:.1f}%")
+        c1.metric("Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+    c2.metric("Units Won", f"{units_won:.1f}")
+    c3.metric("ROI", f"{roi:.1f}%")
 
-    # Manual editor
-    manual_update_results()
+    # Manual editor for this sport
+    manual_update_results(sport_name)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

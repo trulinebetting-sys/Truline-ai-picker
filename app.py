@@ -38,6 +38,11 @@ SPORT_OPTIONS = {
 }
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
+
+# ✅ Persist session state
+if "sport_name" not in st.session_state:
+    st.session_state.sport_name = list(SPORT_OPTIONS.keys())[0]
+
 st.title("TruLine – AI Genius Picker 🚀")
 st.caption("Consensus across books + live odds + AI-style ranking. Tracks results + bankroll ✅")
 st.divider()
@@ -174,7 +179,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     return allp.reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Results tracking + ROI + Manual Editor + Completed Picks
+# Results tracking + ROI
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -186,7 +191,8 @@ def load_results() -> pd.DataFrame:
         return df
     return pd.DataFrame(columns=["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
-def save_results(df: pd.DataFrame): df.to_csv(RESULTS_FILE, index=False)
+def save_results(df: pd.DataFrame): 
+    df.to_csv(RESULTS_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
@@ -217,7 +223,6 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
 def show_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
-
     if sport_results.empty:
         st.info(f"No bets logged yet for {sport_name}.")
         return
@@ -228,45 +233,36 @@ def show_results(sport_name: str):
     total = len(sport_results)
     wins = (sport_results["Result"] == "Win").sum()
     losses = (sport_results["Result"] == "Loss").sum()
-
     sport_results["Risked"] = sport_results["Units"].abs()
     sport_results["PnL"] = sport_results.apply(
-        lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0.0),
-        axis=1
+        lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0.0), axis=1
     )
-
     units_won = sport_results["PnL"].sum()
-    units_risked = sport_results.loc[sport_results["Result"].isin(["Win", "Loss"]), "Risked"].sum()
-    roi = (units_won / units_risked * 100.0) if units_risked > 0 else 0.0
+    units_risked = sport_results.loc[sport_results["Result"].isin(["Win","Loss"]), "Risked"].sum()
+    roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
+    c1,c2,c3 = st.columns(3)
+    if total>0:
+        win_pct = (wins/total)*100
+        c1.metric("Win %",f"{win_pct:.1f}% ({wins}-{losses})")
+    c2.metric("Units Won",f"{units_won:.1f}")
+    c3.metric("ROI",f"{roi:.1f}%")
 
-    c1, c2, c3 = st.columns(3)
-    if total > 0:
-        win_pct = (wins / total) * 100
-        c1.metric("Win %", f"{win_pct:.1f}% ({wins}-{losses})")
-    c2.metric("Units Won", f"{units_won:.1f}")
-    c3.metric("ROI", f"{roi:.1f}%")
-
-    # Manual Result Editor
+    # ─────────────────────────────────────────────
+    # Manual result editor (no redirect)
+    # ─────────────────────────────────────────────
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     updates = {}
-    pending = sport_results[sport_results["Result"] == "Pending"]
-    completed = sport_results[sport_results["Result"].isin(["Win", "Loss"])]
-
-    for i, row in pending.iterrows():
+    for i, row in sport_results.iterrows():
         c1, c2 = st.columns([4,2])
         with c1:
-            label = f"{row['Date/Time']} — {row['Matchup']} ({row['Market']})"
-            if pd.notna(row['Line']):
-                label += f" — Pick: {row['Pick']} ({row['Line']})"
-            else:
-                label += f" — Pick: {row['Pick']}"
-            st.write(label)
+            line_info = f" ({row['Line']})" if pd.notna(row["Line"]) else ""
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
         with c2:
             new_result = st.selectbox(
                 "Set Result",
-                ["Pending", "Win", "Loss"],
+                ["Pending","Win","Loss"],
                 index=["Pending","Win","Loss"].index(row["Result"]),
-                key=f"res_{sport_name}_{i}"
+                key=f"res_{i}"
             )
             updates[i] = new_result
 
@@ -276,18 +272,21 @@ def show_results(sport_name: str):
         save_results(results)
         st.success("Results updated successfully ✅")
 
-    # Completed Picks Tab
+    # Completed picks
+    completed = sport_results[sport_results["Result"].isin(["Win","Loss"])]
     if not completed.empty:
-        st.subheader(f"✅ Completed Picks — {sport_name}")
+        st.subheader("✅ Completed Picks")
         st.dataframe(completed, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
 # ─────────────────────────────────────────────
 with st.sidebar:
-    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
-    regions = st.text_input("Regions", value=DEFAULT_REGIONS)
-    top_n = st.slider("Top picks per tab", 3, 20, 10)
+    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()),
+                              index=list(SPORT_OPTIONS.keys()).index(st.session_state.sport_name),
+                              key="sport_name")
+    regions = st.text_input("Regions", value=DEFAULT_REGIONS, key="regions")
+    top_n = st.slider("Top picks per tab", 3, 20, 10, key="top_n")
     fetch = st.button("Fetch Live Odds")
 
 def consensus_tables(raw: pd.DataFrame, top_n: int):

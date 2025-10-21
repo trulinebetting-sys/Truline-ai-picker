@@ -215,7 +215,7 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
-# ✅ Manual update function (per sport only, separated)
+# ✅ Manual update function (enhanced: shows O/U and spread line)
 def manual_update_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
@@ -232,12 +232,20 @@ def manual_update_results(sport_name: str):
 
     for i, row in pending.iterrows():
         col1, col2, col3 = st.columns([4, 2, 2])
+
+        # Add extra detail for Totals/Spreads
+        pick_label = row['Pick']
+        if row["Market"] in ["Totals", "Spreads"] and pd.notna(row.get("Line")):
+            pick_label = f"{pick_label} ({row['Line']})"
+
         with col1:
-            st.write(f"{row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}")
+            st.write(f"{row['Matchup']} ({row['Market']}) — Pick: {pick_label}")
+
         with col2:
             choice = st.selectbox("Set Result", ["Pending", "Win", "Loss"], 
                                   index=["Pending","Win","Loss"].index(row["Result"]) if row["Result"] in ["Pending","Win","Loss"] else 0, 
                                   key=f"{sport_name}_res_{i}")
+
         with col3:
             if st.button("Save", key=f"{sport_name}_save_{i}"):
                 results.loc[results.index == row.name, "Result"] = choice
@@ -274,7 +282,6 @@ def show_results(sport_name: str):
     c2.metric("Units Won", f"{units_won:.1f}")
     c3.metric("ROI", f"{roi:.1f}%")
 
-    # Separated manual editor for this sport
     manual_update_results(sport_name)
 
 # ─────────────────────────────────────────────

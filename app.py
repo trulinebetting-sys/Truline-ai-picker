@@ -174,7 +174,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     return allp.reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Results tracking + ROI + Manual Editor (fixed)
+# Results tracking + ROI + Manual Editor + Completed Picks
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -246,10 +246,13 @@ def show_results(sport_name: str):
     c2.metric("Units Won", f"{units_won:.1f}")
     c3.metric("ROI", f"{roi:.1f}%")
 
-    # Manual Result Editor (no redirect)
+    # Manual Result Editor
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     updates = {}
-    for i, row in sport_results.iterrows():
+    pending = sport_results[sport_results["Result"] == "Pending"]
+    completed = sport_results[sport_results["Result"].isin(["Win", "Loss"])]
+
+    for i, row in pending.iterrows():
         c1, c2 = st.columns([4,2])
         with c1:
             label = f"{row['Date/Time']} — {row['Matchup']} ({row['Market']})"
@@ -272,6 +275,11 @@ def show_results(sport_name: str):
             results.at[i, "Result"] = new_result
         save_results(results)
         st.success("Results updated successfully ✅")
+
+    # Completed Picks Tab
+    if not completed.empty:
+        st.subheader(f"✅ Completed Picks — {sport_name}")
+        st.dataframe(completed, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

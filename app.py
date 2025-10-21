@@ -38,11 +38,6 @@ SPORT_OPTIONS = {
 }
 
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
-
-# ✅ Persist session state
-if "sport_name" not in st.session_state:
-    st.session_state.sport_name = list(SPORT_OPTIONS.keys())[0]
-
 st.title("TruLine – AI Genius Picker 🚀")
 st.caption("Consensus across books + live odds + AI-style ranking. Tracks results + bankroll ✅")
 st.divider()
@@ -179,7 +174,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     return allp.reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Results tracking + ROI
+# Results tracking + ROI + Manual Editor (form)
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -191,8 +186,7 @@ def load_results() -> pd.DataFrame:
         return df
     return pd.DataFrame(columns=["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
-def save_results(df: pd.DataFrame): 
-    df.to_csv(RESULTS_FILE, index=False)
+def save_results(df: pd.DataFrame): df.to_csv(RESULTS_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
@@ -223,6 +217,7 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
 def show_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
+
     if sport_results.empty:
         st.info(f"No bets logged yet for {sport_name}.")
         return
@@ -240,6 +235,7 @@ def show_results(sport_name: str):
     units_won = sport_results["PnL"].sum()
     units_risked = sport_results.loc[sport_results["Result"].isin(["Win","Loss"]), "Risked"].sum()
     roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
+
     c1,c2,c3 = st.columns(3)
     if total>0:
         win_pct = (wins/total)*100
@@ -248,45 +244,37 @@ def show_results(sport_name: str):
     c3.metric("ROI",f"{roi:.1f}%")
 
     # ─────────────────────────────────────────────
-    # Manual result editor (no redirect)
+    # Manual result editor with form
     # ─────────────────────────────────────────────
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
-    updates = {}
-    for i, row in sport_results.iterrows():
-        c1, c2 = st.columns([4,2])
-        with c1:
-            line_info = f" ({row['Line']})" if pd.notna(row["Line"]) else ""
-            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
-        with c2:
+    editable = sport_results[sport_results["Result"] == "Pending"].copy()
+
+    with st.form("results_form"):
+        updated_results = {}
+        for i, row in editable.iterrows():
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']} {row['Line'] if pd.notna(row['Line']) else ''}")
             new_result = st.selectbox(
-                "Set Result",
+                f"Result for {row['Matchup']} ({row['Market']})",
                 ["Pending","Win","Loss"],
                 index=["Pending","Win","Loss"].index(row["Result"]),
-                key=f"res_{i}"
+                key=f"form_res_{i}"
             )
-            updates[i] = new_result
+            updated_results[i] = new_result
 
-    if st.button("💾 Save All Changes", key=f"saveall_{sport_name}"):
-        for i, new_result in updates.items():
-            results.at[i, "Result"] = new_result
-        save_results(results)
-        st.success("Results updated successfully ✅")
-
-    # Completed picks
-    completed = sport_results[sport_results["Result"].isin(["Win","Loss"])]
-    if not completed.empty:
-        st.subheader("✅ Completed Picks")
-        st.dataframe(completed, use_container_width=True, hide_index=True)
+        submitted = st.form_submit_button("Save All Changes")
+        if submitted:
+            for i, new_res in updated_results.items():
+                results.at[i, "Result"] = new_res
+            save_results(results)
+            st.success("Results updated successfully!")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
 # ─────────────────────────────────────────────
 with st.sidebar:
-    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()),
-                              index=list(SPORT_OPTIONS.keys()).index(st.session_state.sport_name),
-                              key="sport_name")
-    regions = st.text_input("Regions", value=DEFAULT_REGIONS, key="regions")
-    top_n = st.slider("Top picks per tab", 3, 20, 10, key="top_n")
+    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
+    regions = st.text_input("Regions", value=DEFAULT_REGIONS)
+    top_n = st.slider("Top picks per tab", 3, 20, 10)
     fetch = st.button("Fetch Live Odds")
 
 def consensus_tables(raw: pd.DataFrame, top_n: int):

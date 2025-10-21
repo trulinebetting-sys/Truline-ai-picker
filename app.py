@@ -38,15 +38,6 @@ SPORT_OPTIONS = {
     "Soccer (All Major Leagues)": SOCCER_KEYS,
 }
 
-SPORT_API_ENDPOINTS = {
-    "NFL": "https://v1.american-football.api-sports.io/games?league=1&season=2023",
-    "NBA": "https://v1.basketball.api-sports.io/games?league=12&season=2023",
-    "MLB": "https://v1.baseball.api-sports.io/games?league=1&season=2023",
-    "College Football (NCAAF)": "https://v1.american-football.api-sports.io/games?league=2&season=2023",
-    "College Basketball (NCAAB)": "https://v1.basketball.api-sports.io/games?league=7&season=2023",
-    "Soccer (All Major Leagues)": "https://v3.football.api-sports.io/fixtures?season=2023&league=39"
-}
-
 st.set_page_config(page_title="TruLine – AI Genius Picker", layout="wide")
 st.title("TruLine – AI Genius Picker 🚀")
 st.caption("Consensus across books + live odds + AI-style ranking. Tracks results + bankroll ✅")
@@ -224,24 +215,29 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
-# ✅ Manual update function (per sport only)
+# ✅ Manual update function (per sport only, separated)
 def manual_update_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
     if sport_results.empty:
         st.info(f"No results logged yet for {sport_name}.")
         return
+
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     pending = sport_results[sport_results["Result"] == "Pending"].copy()
+
     if pending.empty:
         st.success(f"No pending bets for {sport_name}. All results are updated ✅")
         return
+
     for i, row in pending.iterrows():
         col1, col2, col3 = st.columns([4, 2, 2])
         with col1:
             st.write(f"{row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}")
         with col2:
-            choice = st.selectbox("Set Result", ["Pending", "Win", "Loss"], index=0, key=f"{sport_name}_res_{i}")
+            choice = st.selectbox("Set Result", ["Pending", "Win", "Loss"], 
+                                  index=["Pending","Win","Loss"].index(row["Result"]) if row["Result"] in ["Pending","Win","Loss"] else 0, 
+                                  key=f"{sport_name}_res_{i}")
         with col3:
             if st.button("Save", key=f"{sport_name}_save_{i}"):
                 results.loc[results.index == row.name, "Result"] = choice
@@ -278,7 +274,7 @@ def show_results(sport_name: str):
     c2.metric("Units Won", f"{units_won:.1f}")
     c3.metric("ROI", f"{roi:.1f}%")
 
-    # Manual editor for this sport
+    # Separated manual editor for this sport
     manual_update_results(sport_name)
 
 # ─────────────────────────────────────────────

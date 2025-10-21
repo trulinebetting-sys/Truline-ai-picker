@@ -186,7 +186,8 @@ def load_results() -> pd.DataFrame:
         return df
     return pd.DataFrame(columns=["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
-def save_results(df: pd.DataFrame): df.to_csv(RESULTS_FILE, index=False)
+def save_results(df: pd.DataFrame): 
+    df.to_csv(RESULTS_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
@@ -242,7 +243,7 @@ def show_results(sport_name: str):
     c3.metric("ROI",f"{roi:.1f}%")
 
     # ─────────────────────────────────────────────
-    # Manual result editor with session persistence
+    # Manual result editor — no rerun
     # ─────────────────────────────────────────────
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     for i, row in sport_results.iterrows():
@@ -254,26 +255,20 @@ def show_results(sport_name: str):
                 "Set Result",
                 ["Pending","Win","Loss"],
                 index=["Pending","Win","Loss"].index(row["Result"]),
-                key=f"res_{i}"
+                key=f"res_{sport_name}_{i}"
             )
-            if st.button("Save", key=f"save_{i}"):
+            if st.button("Save", key=f"save_{sport_name}_{i}"):
                 results.at[i, "Result"] = new_result
                 save_results(results)
-                st.session_state.sport_name = sport_name
-                st.experimental_rerun()
+                st.success("Result updated ✅")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
 # ─────────────────────────────────────────────
 with st.sidebar:
-    if "sport_name" not in st.session_state:
-        st.session_state.sport_name = list(SPORT_OPTIONS.keys())[0]
-
-    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()),
-                              index=list(SPORT_OPTIONS.keys()).index(st.session_state.sport_name),
-                              key="sport_name")
-    regions = st.text_input("Regions", value=DEFAULT_REGIONS, key="regions")
-    top_n = st.slider("Top picks per tab", 3, 20, 10, key="top_n")
+    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
+    regions = st.text_input("Regions", value=DEFAULT_REGIONS)
+    top_n = st.slider("Top picks per tab", 3, 20, 10)
     fetch = st.button("Fetch Live Odds")
 
 def consensus_tables(raw: pd.DataFrame, top_n: int):

@@ -235,8 +235,7 @@ with tabs[4]:
 
 with tabs[5]:
     show_results(sport_name)
+
 # ─────────────────────────────────────────────
 # End of app
 # ─────────────────────────────────────────────
-else:
-    st.info("Pick a sport and click **Fetch Live Odds** to get started.")

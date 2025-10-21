@@ -215,7 +215,7 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
-# ✅ Manual update function (enhanced: shows O/U and spread line)
+# ✅ Manual update function (enhanced: shows O/U and spread line + Date)
 def manual_update_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
@@ -231,7 +231,7 @@ def manual_update_results(sport_name: str):
         return
 
     for i, row in pending.iterrows():
-        col1, col2, col3 = st.columns([4, 2, 2])
+        col1, col2, col3 = st.columns([5, 2, 2])
 
         # Add extra detail for Totals/Spreads
         pick_label = row['Pick']
@@ -239,7 +239,7 @@ def manual_update_results(sport_name: str):
             pick_label = f"{pick_label} ({row['Line']})"
 
         with col1:
-            st.write(f"{row['Matchup']} ({row['Market']}) — Pick: {pick_label}")
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {pick_label}")
 
         with col2:
             choice = st.selectbox("Set Result", ["Pending", "Win", "Loss"], 

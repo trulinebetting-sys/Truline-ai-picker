@@ -20,12 +20,8 @@ APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
 SOCCER_KEYS = [
-    "soccer_epl",
-    "soccer_spain_la_liga",
-    "soccer_italy_serie_a",
-    "soccer_france_ligue_one",
-    "soccer_germany_bundesliga",
-    "soccer_uefa_champions_league",
+    "soccer_epl","soccer_spain_la_liga","soccer_italy_serie_a",
+    "soccer_france_ligue_one","soccer_germany_bundesliga","soccer_uefa_champions_league"
 ]
 
 SPORT_OPTIONS = {
@@ -174,7 +170,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     return allp.reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Results tracking + ROI + Manual Editor (form)
+# Results tracking + ROI + Manual Editor
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -244,7 +240,7 @@ def show_results(sport_name: str):
     c3.metric("ROI",f"{roi:.1f}%")
 
     # ─────────────────────────────────────────────
-    # Manual result editor with form
+    # Manual editor for Pending picks
     # ─────────────────────────────────────────────
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     editable = sport_results[sport_results["Result"] == "Pending"].copy()
@@ -261,12 +257,37 @@ def show_results(sport_name: str):
             )
             updated_results[i] = new_result
 
-        submitted = st.form_submit_button("Save All Changes")
+        submitted = st.form_submit_button("Save Pending Picks")
         if submitted:
             for i, new_res in updated_results.items():
                 results.at[i, "Result"] = new_res
             save_results(results)
-            st.success("Results updated successfully!")
+            st.success("Pending picks updated successfully!")
+
+    # ─────────────────────────────────────────────
+    # Completed Picks Editor (Win/Loss)
+    # ─────────────────────────────────────────────
+    st.subheader(f"✅ Completed Picks — {sport_name}")
+    completed = sport_results[sport_results["Result"].isin(["Win","Loss"])].copy()
+
+    with st.form("completed_form"):
+        updated_completed = {}
+        for i, row in completed.iterrows():
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']} {row['Line'] if pd.notna(row['Line']) else ''} — Current: {row['Result']}")
+            new_result = st.selectbox(
+                f"Change Result for {row['Matchup']} ({row['Market']})",
+                ["Win","Loss"],
+                index=["Win","Loss"].index(row["Result"]) if row["Result"] in ["Win","Loss"] else 0,
+                key=f"comp_res_{i}"
+            )
+            updated_completed[i] = new_result
+
+        submitted_comp = st.form_submit_button("Save Completed Picks")
+        if submitted_comp:
+            for i, new_res in updated_completed.items():
+                results.at[i, "Result"] = new_res
+            save_results(results)
+            st.success("Completed picks updated successfully!")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

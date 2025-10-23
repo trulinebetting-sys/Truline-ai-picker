@@ -214,10 +214,12 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
+# ─────────────────────────────────────────────
+# Results tab with per-row Save buttons (no redirect)
+# ─────────────────────────────────────────────
 def show_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
-
     if sport_results.empty:
         st.info(f"No bets logged yet for {sport_name}.")
         return
@@ -235,6 +237,7 @@ def show_results(sport_name: str):
     units_won = sport_results["PnL"].sum()
     units_risked = sport_results.loc[sport_results["Result"].isin(["Win","Loss"]), "Risked"].sum()
     roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
+
     c1,c2,c3 = st.columns(3)
     if total>0:
         win_pct = (wins/total)*100
@@ -242,60 +245,26 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # ─────────────────────────────────────────────
-    # Manual result editor (Pending only)
-    # ─────────────────────────────────────────────
+    # Manual results editor
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
-    pending = sport_results[sport_results["Result"] == "Pending"].copy()
-
-    if pending.empty:
-        st.caption("No pending picks.")
-    else:
-        new_results = {}
-        for i, row in pending.iterrows():
-            c1, c2 = st.columns([4,2])
-            with c1:
-                line_info = f" ({row['Line']})" if pd.notna(row['Line']) and str(row['Line']) != "" else ""
-                st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
-            with c2:
-                new_results[i] = st.selectbox(
-                    "Set Result",
-                    ["Pending","Win","Loss"],
-                    index=["Pending","Win","Loss"].index(row["Result"]),
-                    key=f"res_{i}"
-                )
-        if st.button("💾 Save Pending Picks"):
-            for i, res in new_results.items():
-                results.at[i, "Result"] = res
-            save_results(results)
-            st.success("Results updated!")
-
-    # ─────────────────────────────────────────────
-    # Completed picks editor
-    # ─────────────────────────────────────────────
-    st.subheader(f"✅ Completed Picks — {sport_name}")
-    completed = sport_results[sport_results["Result"].isin(["Win","Loss"])].copy()
-    if completed.empty:
-        st.caption("No completed picks yet.")
-    else:
-        comp_results = {}
-        for i, row in completed.iterrows():
-            c1, c2 = st.columns([4,2])
-            with c1:
-                line_info = f" ({row['Line']})" if pd.notna(row['Line']) and str(row['Line']) != "" else ""
-                st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
-            with c2:
-                comp_results[i] = st.selectbox(
-                    "Edit Result",
-                    ["Win","Loss"],
-                    index=["Win","Loss"].index(row["Result"]),
-                    key=f"comp_{i}"
-                )
-        if st.button("💾 Save Completed Picks"):
-            for i, res in comp_results.items():
-                results.at[i, "Result"] = res
-            save_results(results)
-            st.success("Completed picks updated!")
+    for i, row in sport_results.iterrows():
+        c1, c2 = st.columns([4, 2])
+        with c1:
+            pick_info = f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}"
+            if pd.notna(row['Line']):
+                pick_info += f" ({row['Line']})"
+            st.write(pick_info)
+        with c2:
+            new_result = st.selectbox(
+                "Set Result",
+                ["Pending","Win","Loss"],
+                index=["Pending","Win","Loss"].index(row["Result"]),
+                key=f"res_{i}"
+            )
+            if st.button("Save", key=f"save_{i}"):
+                results.at[i, "Result"] = new_result
+                save_results(results)
+                st.success("Result saved ✅")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

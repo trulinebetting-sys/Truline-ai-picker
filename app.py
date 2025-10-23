@@ -14,18 +14,14 @@ try:
 except Exception:
     pass
 
-# ✅ Odds API Key
+# ✅ Odds API Key (hardcoded for now)
 ODDS_API_KEY = "1d677dc98d978ccc24d9914d835442f1"
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
 SOCCER_KEYS = [
-    "soccer_epl",
-    "soccer_spain_la_liga",
-    "soccer_italy_serie_a",
-    "soccer_france_ligue_one",
-    "soccer_germany_bundesliga",
-    "soccer_uefa_champions_league",
+    "soccer_epl","soccer_spain_la_liga","soccer_italy_serie_a",
+    "soccer_france_ligue_one","soccer_germany_bundesliga","soccer_uefa_champions_league"
 ]
 
 SPORT_OPTIONS = {
@@ -174,7 +170,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     return allp.reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Results tracking + ROI
+# Results tracking + ROI + Manual Editor
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
 
@@ -214,17 +210,16 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
-# ─────────────────────────────────────────────
-# Results tab (dropdown style)
-# ─────────────────────────────────────────────
 def show_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
+
     if sport_results.empty:
         st.info(f"No bets logged yet for {sport_name}.")
         return
 
     st.subheader(f"📊 Results — {sport_name}")
+    st.dataframe(sport_results,use_container_width=True,hide_index=True)
 
     total = len(sport_results)
     wins = (sport_results["Result"] == "Win").sum()
@@ -244,45 +239,55 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # ─────────── Sub-tabs per Market ───────────
-    subtabs = st.tabs(["Moneyline", "Spreads", "Totals", "AI Genius"])
-    for m_i, m in enumerate(["Moneyline","Spreads","Totals","AI Genius"]):
-        with subtabs[m_i]:
-            m_res = sport_results[sport_results["Market"] == m].copy()
-            if m_res.empty:
-                st.info(f"No {m} picks yet.")
-                continue
+    # ─────────────────────────────────────────────
+    # Manual editor for Pending picks
+    # ─────────────────────────────────────────────
+    st.subheader(f"✍️ Manual Result Editor — {sport_name}")
+    editable = sport_results[sport_results["Result"] == "Pending"].copy()
 
-            pending = m_res[m_res["Result"]=="Pending"]
-            completed = m_res[m_res["Result"].isin(["Win","Loss"])]
+    with st.form("results_form"):
+        updated_results = {}
+        for i, row in editable.iterrows():
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']} {row['Line'] if pd.notna(row['Line']) else ''}")
+            new_result = st.selectbox(
+                f"Result for {row['Matchup']} ({row['Market']})",
+                ["Pending","Win","Loss"],
+                index=["Pending","Win","Loss"].index(row["Result"]),
+                key=f"form_res_{i}"
+            )
+            updated_results[i] = new_result
 
-            st.markdown("#### Pending Picks")
-            if not pending.empty:
-                choice = st.selectbox(
-                    f"Select Pending {m} Pick",
-                    pending.index,
-                    format_func=lambda i: f"{pending.at[i,'Date/Time']} — {pending.at[i,'Matchup']} — Pick: {pending.at[i,'Pick']} ({pending.at[i,'Line']})",
-                    key=f"pending_{m}_{sport_name}"
-                )
-                new_result = st.radio("Set Result",["Win","Loss"],key=f"set_{m}_{sport_name}")
-                if st.button("Save Result", key=f"save_{m}_{sport_name}"):
-                    results.at[choice,"Result"] = new_result
-                    save_results(results)
-                    st.success("Result saved!")
+        submitted = st.form_submit_button("Save Pending Picks")
+        if submitted:
+            for i, new_res in updated_results.items():
+                results.at[i, "Result"] = new_res
+            save_results(results)
+            st.success("Pending picks updated successfully!")
 
-            st.markdown("#### Completed Picks")
-            if not completed.empty:
-                choice_c = st.selectbox(
-                    f"Select Completed {m} Pick",
-                    completed.index,
-                    format_func=lambda i: f"{completed.at[i,'Date/Time']} — {completed.at[i,'Matchup']} — Pick: {completed.at[i,'Pick']} ({completed.at[i,'Line']}) — {completed.at[i,'Result']}",
-                    key=f"completed_{m}_{sport_name}"
-                )
-                new_result_c = st.radio("Update Result",["Win","Loss"],index=["Win","Loss"].index(completed.at[choice_c,"Result"]),key=f"update_{m}_{sport_name}")
-                if st.button("Update Result", key=f"update_btn_{m}_{sport_name}"):
-                    results.at[choice_c,"Result"] = new_result_c
-                    save_results(results)
-                    st.success("Result updated!")
+    # ─────────────────────────────────────────────
+    # Completed Picks Editor (Win/Loss)
+    # ─────────────────────────────────────────────
+    st.subheader(f"✅ Completed Picks — {sport_name}")
+    completed = sport_results[sport_results["Result"].isin(["Win","Loss"])].copy()
+
+    with st.form("completed_form"):
+        updated_completed = {}
+        for i, row in completed.iterrows():
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']} {row['Line'] if pd.notna(row['Line']) else ''} — Current: {row['Result']}")
+            new_result = st.selectbox(
+                f"Change Result for {row['Matchup']} ({row['Market']})",
+                ["Win","Loss"],
+                index=["Win","Loss"].index(row["Result"]) if row["Result"] in ["Win","Loss"] else 0,
+                key=f"comp_res_{i}"
+            )
+            updated_completed[i] = new_result
+
+        submitted_comp = st.form_submit_button("Save Completed Picks")
+        if submitted_comp:
+            for i, new_res in updated_completed.items():
+                results.at[i, "Result"] = new_res
+            save_results(results)
+            st.success("Completed picks updated successfully!")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -324,7 +329,7 @@ if fetch:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
         ai_picks,ml,totals,spreads,cons = consensus_tables(raw,top_n)
-        auto_log_picks({"Moneyline": ml,"Totals": totals,"Spreads": spreads,"AI Genius": ai_picks}, sport_name)
+        auto_log_picks({"AI Genius": ai_picks,"Moneyline": ml,"Totals": totals,"Spreads": spreads}, sport_name)
         tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
         with tabs[0]:
             st.subheader("AI Genius — Highest Consensus Confidence (Top)")

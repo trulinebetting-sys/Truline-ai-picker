@@ -190,7 +190,9 @@ def save_results(df: pd.DataFrame): df.to_csv(RESULTS_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
-    for market_label, picks in dfs.items():
+    # 🚨 Only log Moneyline, Totals, and Spreads
+    for market_label in ["Moneyline", "Totals", "Spreads"]:
+        picks = dfs.get(market_label)
         if picks is None or picks.empty: continue
         for _, row in picks.iterrows():
             entry = {
@@ -245,7 +247,7 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # Manual results editor
+    # Manual results editor (no redirect, saves in place)
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     for i, row in sport_results.iterrows():
         c1, c2 = st.columns([4, 2])
@@ -264,7 +266,7 @@ def show_results(sport_name: str):
             if st.button("Save", key=f"save_{i}"):
                 results.at[i, "Result"] = new_result
                 save_results(results)
-                st.success("Result saved ✅")
+                st.success("Result saved ✅")  # No rerun, stays on Results tab
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
@@ -306,7 +308,7 @@ if fetch:
         st.warning("No data returned. Try a different sport or check API quota.")
     else:
         ai_picks,ml,totals,spreads,cons = consensus_tables(raw,top_n)
-        auto_log_picks({"AI Genius": ai_picks,"Moneyline": ml,"Totals": totals,"Spreads": spreads}, sport_name)
+        auto_log_picks({"Moneyline": ml,"Totals": totals,"Spreads": spreads}, sport_name)
         tabs = st.tabs(["🤖 AI Genius Picks","Moneylines","Totals","Spreads","Raw Data","📊 Results"])
         with tabs[0]:
             st.subheader("AI Genius — Highest Consensus Confidence (Top)")

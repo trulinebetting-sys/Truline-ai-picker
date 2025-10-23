@@ -16,6 +16,7 @@ except Exception:
 
 # ✅ Odds API Key (hardcoded for now)
 ODDS_API_KEY = "1d677dc98d978ccc24d9914d835442f1"
+
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
@@ -183,12 +184,10 @@ def load_results() -> pd.DataFrame:
         df = pd.read_csv(RESULTS_FILE)
         if "Sport" not in df.columns: df["Sport"] = "Unknown"
         if "Market" not in df.columns: df["Market"] = "Unknown"
-        if "Line" not in df.columns: df["Line"] = ""
         return df
     return pd.DataFrame(columns=["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
-def save_results(df: pd.DataFrame):
-    df.to_csv(RESULTS_FILE, index=False)
+def save_results(df: pd.DataFrame): df.to_csv(RESULTS_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
@@ -216,6 +215,43 @@ def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
                 results = pd.concat([results,pd.DataFrame([entry])],ignore_index=True)
     save_results(results)
 
+# ✅ Manual update function (enhanced: shows O/U and spread line + Date)
+def manual_update_results(sport_name: str):
+    results = load_results()
+    sport_results = results[results["Sport"] == sport_name].copy()
+    if sport_results.empty:
+        st.info(f"No results logged yet for {sport_name}.")
+        return
+
+    st.subheader(f"✍️ Manual Result Editor — {sport_name}")
+    pending = sport_results[sport_results["Result"] == "Pending"].copy()
+
+    if pending.empty:
+        st.success(f"No pending bets for {sport_name}. All results are updated ✅")
+        return
+
+    for i, row in pending.iterrows():
+        col1, col2, col3 = st.columns([5, 2, 2])
+
+        # Add extra detail for Totals/Spreads
+        pick_label = row['Pick']
+        if row["Market"] in ["Totals", "Spreads"] and pd.notna(row.get("Line")):
+            pick_label = f"{pick_label} ({row['Line']})"
+
+        with col1:
+            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {pick_label}")
+
+        with col2:
+            choice = st.selectbox("Set Result", ["Pending", "Win", "Loss"], 
+                                  index=["Pending","Win","Loss"].index(row["Result"]) if row["Result"] in ["Pending","Win","Loss"] else 0, 
+                                  key=f"{sport_name}_res_{i}")
+
+        with col3:
+            if st.button("Save", key=f"{sport_name}_save_{i}"):
+                results.loc[results.index == row.name, "Result"] = choice
+                save_results(results)
+                st.experimental_rerun()
+
 def show_results(sport_name: str):
     results = load_results()
     sport_results = results[results["Sport"] == sport_name].copy()
@@ -224,52 +260,37 @@ def show_results(sport_name: str):
         return
 
     st.subheader(f"📊 Results — {sport_name}")
-    st.dataframe(sport_results,use_container_width=True,hide_index=True)
+    st.dataframe(sport_results, use_container_width=True, hide_index=True)
 
     total = len(sport_results)
     wins = (sport_results["Result"] == "Win").sum()
     losses = (sport_results["Result"] == "Loss").sum()
+
     sport_results["Risked"] = sport_results["Units"].abs()
     sport_results["PnL"] = sport_results.apply(
         lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0.0), axis=1
     )
+
     units_won = sport_results["PnL"].sum()
     units_risked = sport_results.loc[sport_results["Result"].isin(["Win","Loss"]), "Risked"].sum()
-    roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
+    roi = (units_won/units_risked*100.0) if units_risked > 0 else 0.0
+
     c1,c2,c3 = st.columns(3)
     if total>0:
         win_pct = (wins/total)*100
-        c1.metric("Win %",f"{win_pct:.1f}% ({wins}-{losses})")
-    c2.metric("Units Won",f"{units_won:.1f}")
-    c3.metric("ROI",f"{roi:.1f}%")
+        c1.metric("Win %", f"{win_pct:.1f}% ({wins}-{losses})")
+    c2.metric("Units Won", f"{units_won:.1f}")
+    c3.metric("ROI", f"{roi:.1f}%")
 
-    # Manual editor with line info
-    st.subheader(f"✍️ Manual Result Editor — {sport_name}")
-    filtered = results[results["Sport"] == sport_name]
-    for orig_idx, row in filtered.iterrows():
-        c1, c2 = st.columns([4,2])
-        with c1:
-            line_info = f" ({row['Line']})" if pd.notna(row['Line']) and str(row['Line']).strip() != "" else ""
-            st.write(f"{row['Date/Time']} — {row['Matchup']} ({row['Market']}) — Pick: {row['Pick']}{line_info}")
-        with c2:
-            new_result = st.selectbox(
-                "Set Result",
-                ["Pending","Win","Loss"],
-                index=["Pending","Win","Loss"].index(str(row.get("Result","Pending"))),
-                key=f"res_{sport_name}_{orig_idx}"
-            )
-            if st.button("Save", key=f"save_{sport_name}_{orig_idx}"):
-                results.at[orig_idx, "Result"] = new_result
-                save_results(results)
-                st.success("Result updated ✅")
+    manual_update_results(sport_name)
 
 # ─────────────────────────────────────────────
 # Sidebar + Main
 # ─────────────────────────────────────────────
 with st.sidebar:
-    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()), index=0)
-    regions = st.text_input("Regions", value=DEFAULT_REGIONS)
-    top_n = st.slider("Top picks per tab", 3, 20, 10)
+    sport_name = st.selectbox("Sport",list(SPORT_OPTIONS.keys()),index=0)
+    regions = st.text_input("Regions",value=DEFAULT_REGIONS)
+    top_n = st.slider("Top picks per tab",3,20,10)
     fetch = st.button("Fetch Live Odds")
 
 def consensus_tables(raw: pd.DataFrame, top_n: int):
@@ -327,5 +348,6 @@ if fetch:
             st.caption("Tip: this is the source that feeds the consensus tables.")
         with tabs[5]:
             show_results(sport_name)
+
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

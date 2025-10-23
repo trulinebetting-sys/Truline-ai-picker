@@ -246,42 +246,35 @@ def show_market_editor(sport_name: str, market_label: str, results_df: pd.DataFr
     Collapsible editor for a single market:
     - Pending dropdown
     - Completed dropdown (editable too)
-    Dedup displayed rows.
+    - Percentages update immediately after save
     """
-    market_df = results_df[(results_df["Sport"] == sport_name) & (results_df["Market"] == market_label)].copy()
+    def render_summary(df):
+        msum = calc_summary(df[df["Result"].isin(["Win","Loss"])])
+        c1,c2,c3 = st.columns(3)
+        c1.metric(f"{market_label} Win %", f"{msum['win_pct']:.1f}% ({msum['wins']}-{msum['losses']})")
+        c2.metric(f"{market_label} Units Won", f"{msum['units_won']:.1f}")
+        c3.metric(f"{market_label} ROI", f"{msum['roi']:.1f}%")
 
-    # nice summary metrics for this market
-    msum = calc_summary(market_df[market_df["Result"].isin(["Win","Loss"])])
-    c1,c2,c3 = st.columns(3)
-    c1.metric(f"{market_label} Win %", f"{msum['win_pct']:.1f}% ({msum['wins']}-{msum['losses']})")
-    c2.metric(f"{market_label} Units Won", f"{msum['units_won']:.1f}")
-    c3.metric(f"{market_label} ROI", f"{msum['roi']:.1f}%")
+    # load fresh data every render
+    results_df = load_results()
+    market_df = results_df[(results_df["Sport"] == sport_name) & (results_df["Market"] == market_label)].copy()
+    render_summary(market_df)
 
     # Pending editor
     with st.expander(f"✍️ Edit Pending — {market_label}", expanded=False):
         pending = market_df[market_df["Result"] == "Pending"].copy()
 
-        # Deduplicate display rows by the identity of a pick
         if not pending.empty:
-            pending["_key"] = (
-                pending["Date/Time"].astype(str) + " | " +
-                pending["Matchup"].astype(str) + " | " +
-                pending["Pick"].astype(str) + " | " +
-                pending["Line"].fillna("").astype(str)
-            )
-            pending = pending.drop_duplicates("_key")
-
             for i, r in pending.iterrows():
                 left, right = st.columns([5,2])
                 with left:
-                    # show richer info for totals/spreads
                     label = f"{r['Date/Time']} — {r['Matchup']} ({r['Market']}) — Pick: "
                     if r["Market"] == "Totals":
                         label += f"{r['Pick']} ({r['Line']})"
                     elif r["Market"] == "Spreads":
                         try:
                             ln = float(r["Line"])
-                            sign = "+" if ln > 0 else ""  # keep minus automatically
+                            sign = "+" if ln > 0 else ""
                             label += f"{r['Pick']} ({sign}{ln})"
                         except Exception:
                             label += f"{r['Pick']} ({r['Line']})"
@@ -292,11 +285,10 @@ def show_market_editor(sport_name: str, market_label: str, results_df: pd.DataFr
                     sel = st.selectbox(
                         "Set Result",
                         ["Pending","Win","Loss"],
-                        index=0,
+                        index=["Pending","Win","Loss"].index(r["Result"]) if r["Result"] in ["Pending","Win","Loss"] else 0,
                         key=f"{key_prefix}_pend_sel_{i}"
                     )
                     if st.button("Save", key=f"{key_prefix}_pend_save_{i}"):
-                        # Update the *first* matching row(s) for this identity
                         mask = (
                             (results_df["Sport"] == sport_name) &
                             (results_df["Market"] == r["Market"]) &
@@ -308,7 +300,10 @@ def show_market_editor(sport_name: str, market_label: str, results_df: pd.DataFr
                         results_df.loc[mask, "Result"] = sel
                         save_results(results_df)
                         st.success("Saved ✅")
-
+                        # reload summary immediately
+                        results_df = load_results()
+                        market_df = results_df[(results_df["Sport"] == sport_name) & (results_df["Market"] == market_label)]
+                        render_summary(market_df)
         else:
             st.info("No pending picks here.")
 
@@ -316,13 +311,6 @@ def show_market_editor(sport_name: str, market_label: str, results_df: pd.DataFr
     with st.expander(f"🗂 Completed — {market_label}", expanded=False):
         done = market_df[market_df["Result"].isin(["Win","Loss"])].copy()
         if not done.empty:
-            done["_key"] = (
-                done["Date/Time"].astype(str) + " | " +
-                done["Matchup"].astype(str) + " | " +
-                done["Pick"].astype(str) + " | " +
-                done["Line"].fillna("").astype(str)
-            )
-            done = done.drop_duplicates("_key").sort_values("Date/Time")
             for i, r in done.iterrows():
                 left, right = st.columns([5,2])
                 with left:
@@ -357,7 +345,11 @@ def show_market_editor(sport_name: str, market_label: str, results_df: pd.DataFr
                         )
                         results_df.loc[mask, "Result"] = sel
                         save_results(results_df)
-                        st.success("Saved ✅")
+                        st.success("Updated ✅")
+                        # reload summary immediately
+                        results_df = load_results()
+                        market_df = results_df[(results_df["Sport"] == sport_name) & (results_df["Market"] == market_label)]
+                        render_summary(market_df)
         else:
             st.info("No completed picks yet.")
 

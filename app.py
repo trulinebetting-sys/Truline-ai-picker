@@ -190,7 +190,6 @@ def save_results(df: pd.DataFrame): df.to_csv(RESULTS_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
-    # 🚨 Only log Moneyline, Totals, and Spreads
     for market_label in ["Moneyline", "Totals", "Spreads"]:
         picks = dfs.get(market_label)
         if picks is None or picks.empty: continue
@@ -247,7 +246,6 @@ def show_results(sport_name: str):
     c2.metric("Units Won",f"{units_won:.1f}")
     c3.metric("ROI",f"{roi:.1f}%")
 
-    # Manual results editor (no redirect, saves in place)
     st.subheader(f"✍️ Manual Result Editor — {sport_name}")
     for i, row in sport_results.iterrows():
         c1, c2 = st.columns([4, 2])
@@ -263,10 +261,11 @@ def show_results(sport_name: str):
                 index=["Pending","Win","Loss"].index(row["Result"]),
                 key=f"res_{i}"
             )
-            if st.button("Save", key=f"save_{i}"):
+            # Save immediately when changed (no rerun)
+            if new_result != row["Result"]:
                 results.at[i, "Result"] = new_result
                 save_results(results)
-                st.success("Result saved ✅")  # No rerun, stays on Results tab
+                st.success(f"Saved: {row['Matchup']} → {new_result}")
 
 # ─────────────────────────────────────────────
 # Sidebar + Main

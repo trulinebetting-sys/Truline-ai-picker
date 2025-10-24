@@ -470,7 +470,7 @@ if st.session_state.get("has_data", False):
         confidence_bars(st.session_state.ai_picks, "Confidence heat — AI Genius")
         st.markdown("---")
         st.markdown("### ✍️ Manual Result Editor — AI Genius")
-        show_market_editor(sport_name, "AI Genius", load_results(), key_prefix="ai")
+        show_market_editor(sport_name, "AI Genius", key_prefix="ai")
 
     # Tab 1 — Moneylines
     with tabs[1]:
@@ -479,7 +479,7 @@ if st.session_state.get("has_data", False):
         confidence_bars(st.session_state.ml, "Confidence heat — Moneylines")
         st.markdown("---")
         st.markdown("### ✍️ Manual Result Editor — Moneyline")
-        show_market_editor(sport_name, "Moneyline", load_results(), key_prefix="ml")
+        show_market_editor(sport_name, "Moneyline", key_prefix="ml")
 
     # Tab 2 — Totals
     with tabs[2]:
@@ -488,7 +488,7 @@ if st.session_state.get("has_data", False):
         confidence_bars(st.session_state.totals, "Confidence heat — Totals")
         st.markdown("---")
         st.markdown("### ✍️ Manual Result Editor — Totals")
-        show_market_editor(sport_name, "Totals", load_results(), key_prefix="tot")
+        show_market_editor(sport_name, "Totals", key_prefix="tot")
 
     # Tab 3 — Spreads
     with tabs[3]:
@@ -497,7 +497,7 @@ if st.session_state.get("has_data", False):
         confidence_bars(st.session_state.spreads, "Confidence heat — Spreads")
         st.markdown("---")
         st.markdown("### ✍️ Manual Result Editor — Spreads")
-        show_market_editor(sport_name, "Spreads", load_results(), key_prefix="spr")
+        show_market_editor(sport_name, "Spreads", key_prefix="spr")
 
     # Tab 4 — Raw
     with tabs[4]:

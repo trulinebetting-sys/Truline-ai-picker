@@ -295,19 +295,24 @@ def show_market_editor(sport_name: str, market_label: str, results_df: pd.DataFr
                         index=0,
                         key=f"{key_prefix}_pend_sel_{i}"
                     )
-                    if st.button("Save", key=f"{key_prefix}_pend_save_{i}"):
-                        # Update the *first* matching row(s) for this identity
-                        mask = (
-                            (results_df["Sport"] == sport_name) &
-                            (results_df["Market"] == r["Market"]) &
-                            (results_df["Date/Time"] == r["Date/Time"]) &
-                            (results_df["Matchup"] == r["Matchup"]) &
-                            (results_df["Pick"] == r["Pick"]) &
-                            (results_df["Line"].fillna("").astype(str) == str(r["Line"]))
-                        )
-                        results_df.loc[mask, "Result"] = sel
-                        save_results(results_df)
-                        st.success("Saved ✅")
+                  if st.button("Save", key=f"{key_prefix}_pend_save_{i}"):
+                    mask = (
+                        (results_df["Sport"] == sport_name) &
+                        (results_df["Market"] == r["Market"]) &
+                        (results_df["Date/Time"] == r["Date/Time"]) &
+                        (results_df["Matchup"] == r["Matchup"]) &
+                        (results_df["Pick"] == r["Pick"]) &
+                        (results_df["Line"].fillna("").astype(str) == str(r["Line"]))
+                    )
+                    results_df.loc[mask, "Result"] = sel
+                    save_results(results_df)
+
+                    # ✅ reload to force summary update
+                    new_results = load_results()
+                    new_market_df = new_results[(new_results["Sport"] == sport_name) & (new_results["Market"] == market_label)]
+                    new_sum = calc_summary(new_market_df[new_market_df["Result"].isin(["Win","Loss"])])
+
+                    st.success(f"Saved ✅ | Updated Win%: {new_sum['win_pct']:.1f}% ({new_sum['wins']}-{new_sum['losses']})")
 
         else:
             st.info("No pending picks here.")

@@ -353,7 +353,7 @@ if st.session_state.get("has_data", False):
         if results.empty:
             st.info("No bets logged yet.")
         else:
-            st.dataframe(results, use_container_width=True, hide_index=True)
+            results = load_results()
             summ = calc_summary(results[results["Result"].isin(["Win","Loss"])])
             c1,c2,c3 = st.columns(3)
             c1.metric("Win %", f"{summ['win_pct']:.1f}% ({summ['wins']}-{summ['losses']})")

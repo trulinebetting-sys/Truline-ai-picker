@@ -176,6 +176,7 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
 # Results tracking + ROI
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
+EXCEL_FILE = "bets.xlsx"
 
 def load_results() -> pd.DataFrame:
     if os.path.exists(RESULTS_FILE):
@@ -189,7 +190,7 @@ def load_results() -> pd.DataFrame:
 
 def save_results(df: pd.DataFrame):
     df.to_csv(RESULTS_FILE, index=False)
-    df.to_excel("bets.xlsx", index=False)
+    df.to_excel(EXCEL_FILE, index=False)
 
 def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
     results = load_results()
@@ -249,14 +250,14 @@ with st.sidebar:
     fetch = st.button("Fetch Live Odds")
 
     st.markdown("### 📥 Download Results")
-    results = load_results()
-    if not results.empty:
-        st.download_button(
-            "Download Results (Excel)",
-            data=open("bets.xlsx","rb").read(),
-            file_name="bets.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    if os.path.exists(EXCEL_FILE):
+        with open(EXCEL_FILE,"rb") as f:
+            st.download_button(
+                "Download Results (Excel)",
+                data=f,
+                file_name="bets.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # ─────────────────────────────────────────────
 # Consensus + Rendering

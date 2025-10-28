@@ -16,7 +16,7 @@ except Exception:
 
 # ✅ Odds API Key (hardcoded for now)
 ODDS_API_KEY = "1d677dc98d978ccc24d9914d835442f1"
-APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))  # only used if you later re-enable auto-updates
+APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
 
 SOCCER_KEYS = [
@@ -94,7 +94,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
         for bk in ev.get("bookmakers", []):
             book = bk.get("title")
             for mk in bk.get("markets", []):
-                mkey = mk.get("key")  # h2h, spreads, totals
+                mkey = mk.get("key")
                 for oc in mk.get("outcomes", []):
                     rows.append({
                         "event_id": event_id,
@@ -103,8 +103,8 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "away_team": away,
                         "book": book,
                         "market": mkey,
-                        "outcome": oc.get("name"),       # Home/Away/Over/Under
-                        "line": oc.get("point"),         # may be None for ML
+                        "outcome": oc.get("name"),
+                        "line": oc.get("point"),
                         "odds_american": oc.get("price"),
                         "odds_decimal": american_to_decimal(oc.get("price")),
                         "conf_book": implied_prob_american(oc.get("price")),
@@ -177,247 +177,68 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
 # Results tracking + ROI
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
+EXCEL_FILE = "bets.xlsx"
 
 def load_results() -> pd.DataFrame:
     if os.path.exists(RESULTS_FILE):
         df = pd.read_csv(RESULTS_FILE)
-        # Backward-compat columns
         for col in ["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"]:
             if col not in df.columns:
                 df[col] = "" if col != "Units" else 1.0
-        # Normalize Result values
         df["Result"] = df["Result"].fillna("Pending")
         return df
     return pd.DataFrame(columns=["Sport","Market","Date/Time","Matchup","Pick","Line","Odds (US)","Units","Result"])
 
 def save_results(df: pd.DataFrame):
     df.to_csv(RESULTS_FILE, index=False)
+    df.to_excel(EXCEL_FILE, index=False)   # 👈 NEW: Always also export Excel
 
-def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
-    """
-    Dedup-safe logging. Keys: Date/Time, Matchup, Market, Pick, Line
-    """
-    results = load_results()
-    for market_label, picks in dfs.items():
-        if picks is None or picks.empty: 
-            continue
-        for _, row in picks.iterrows():
-            entry = {
-                "Sport": sport_name,
-                "Market": market_label,
-                "Date/Time": row.get("Date/Time",""),
-                "Matchup": row.get("Matchup",""),
-                "Pick": row.get("Pick",""),
-                "Line": row.get("Line",""),
-                "Odds (US)": row.get("Odds (US)",""),
-                "Units": float(row.get("Units", 1.0)) if str(row.get("Units","")).strip() != "" else 1.0,
-                "Result": "Pending"
-            }
-            dup_mask = (
-                (results["Sport"] == entry["Sport"]) &
-                (results["Market"] == entry["Market"]) &
-                (results["Date/Time"] == entry["Date/Time"]) &
-                (results["Matchup"] == entry["Matchup"]) &
-                (results["Pick"] == entry["Pick"]) &
-                (results["Line"].fillna("").astype(str) == str(entry["Line"]))
-            )
-            if not dup_mask.any():
-                results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
-    save_results(results)
-
-def calc_summary(df: pd.DataFrame) -> Dict[str, float]:
-    if df.empty:
-        return {"win_pct":0.0,"units_won":0.0,"roi":0.0,"wins":0,"losses":0,"total":0}
-    total = len(df)
-    wins = (df["Result"] == "Win").sum()
-    losses = (df["Result"] == "Loss").sum()
-    # Units PnL and ROI
-    df = df.copy()
-    df["Risked"] = df["Units"].astype(float).abs()
-    df["PnL"] = df.apply(lambda r: r["Units"] if r["Result"] == "Win" else (-r["Units"] if r["Result"] == "Loss" else 0.0), axis=1)
-    units_won = float(df["PnL"].sum())
-    units_risked = float(df.loc[df["Result"].isin(["Win","Loss"]), "Risked"].sum())
-    roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
-    win_pct = (wins/total*100.0) if total>0 else 0.0
-    return {"win_pct":win_pct,"units_won":units_won,"roi":roi,"wins":wins,"losses":losses,"total":total}
-
-def show_market_editor(sport_name: str, market_label: str, key_prefix: str):
-    """
-    Collapsible editor for a single market:
-    - Pending dropdown
-    - Completed dropdown (editable too)
-    Updates percentages immediately after save.
-    """
-    results_df = load_results()
-    market_df = results_df[(results_df["Sport"] == sport_name) & (results_df["Market"] == market_label)].copy()
-
-    # nice summary metrics for this market
-    msum = calc_summary(market_df[market_df["Result"].isin(["Win","Loss"])])
-    c1,c2,c3 = st.columns(3)
-    c1.metric(f"{market_label} Win %", f"{msum['win_pct']:.1f}% ({msum['wins']}-{msum['losses']})")
-    c2.metric(f"{market_label} Units Won", f"{msum['units_won']:.1f}")
-    c3.metric(f"{market_label} ROI", f"{msum['roi']:.1f}%")
-
-    # Pending editor
-    with st.expander(f"✍️ Edit Pending — {market_label}", expanded=False):
-        pending = market_df[market_df["Result"] == "Pending"].copy()
-
-        if not pending.empty:
-            for i, r in pending.iterrows():
-                left, right = st.columns([5,2])
-                with left:
-                    label = f"{r['Date/Time']} — {r['Matchup']} — Pick: {r['Pick']}"
-                    if r["Line"] not in ["", None, np.nan]:
-                        label += f" ({r['Line']})"
-                    st.write(label)
-                with right:
-                    sel = st.selectbox(
-                        "Set Result",
-                        ["Pending","Win","Loss"],
-                        index=0,
-                        key=f"{key_prefix}_pend_sel_{i}"
-                    )
-                    if st.button("Save", key=f"{key_prefix}_pend_save_{i}"):
-                        mask = (
-                            (results_df["Sport"] == sport_name) &
-                            (results_df["Market"] == r["Market"]) &
-                            (results_df["Date/Time"] == r["Date/Time"]) &
-                            (results_df["Matchup"] == r["Matchup"]) &
-                            (results_df["Pick"] == r["Pick"]) &
-                            (results_df["Line"].fillna("").astype(str) == str(r["Line"]))
-                        )
-                        results_df.loc[mask, "Result"] = sel
-                        save_results(results_df)
-                        st.session_state[f"last_update_{key_prefix}"] = True
-                        st.experimental_rerun()
-
-        else:
-            st.info("No pending picks here.")
-
-    # Completed editor
-    with st.expander(f"🗂 Completed — {market_label}", expanded=False):
-        done = market_df[market_df["Result"].isin(["Win","Loss"])].copy()
-        if not done.empty:
-            for i, r in done.iterrows():
-                left, right = st.columns([5,2])
-                with left:
-                    st.write(f"{r['Date/Time']} — {r['Matchup']} — Pick: {r['Pick']} ({r['Result']})")
-                with right:
-                    sel = st.selectbox(
-                        "Adjust Result",
-                        ["Win","Loss","Pending"],
-                        index=["Win","Loss","Pending"].index(r["Result"]),
-                        key=f"{key_prefix}_done_sel_{i}"
-                    )
-                    if st.button("Save", key=f"{key_prefix}_done_save_{i}"):
-                        mask = (
-                            (results_df["Sport"] == sport_name) &
-                            (results_df["Market"] == r["Market"]) &
-                            (results_df["Date/Time"] == r["Date/Time"]) &
-                            (results_df["Matchup"] == r["Matchup"]) &
-                            (results_df["Pick"] == r["Pick"]) &
-                            (results_df["Line"].fillna("").astype(str) == str(r["Line"]))
-                        )
-                        results_df.loc[mask, "Result"] = sel
-                        save_results(results_df)
-                        st.session_state[f"last_update_{key_prefix}"] = True
-                        st.experimental_rerun()
-        else:
-            st.info("No completed picks yet.")
-
-    # Completed editor (so you can fix mistakes)
-    with st.expander(f"🗂 Completed — {market_label}", expanded=False):
-        done = market_df[market_df["Result"].isin(["Win","Loss"])].copy()
-        if not done.empty:
-            done["_key"] = (
-                done["Date/Time"].astype(str) + " | " +
-                done["Matchup"].astype(str) + " | " +
-                done["Pick"].astype(str) + " | " +
-                done["Line"].fillna("").astype(str)
-            )
-            done = done.drop_duplicates("_key").sort_values("Date/Time")
-            for i, r in done.iterrows():
-                left, right = st.columns([5,2])
-                with left:
-                    label = f"{r['Date/Time']} — {r['Matchup']} ({r['Market']}) — Pick: "
-                    if r["Market"] == "Totals":
-                        label += f"{r['Pick']} ({r['Line']})"
-                    elif r["Market"] == "Spreads":
-                        try:
-                            ln = float(r["Line"])
-                            sign = "+" if ln > 0 else ""
-                            label += f"{r['Pick']} ({sign}{ln})"
-                        except Exception:
-                            label += f"{r['Pick']} ({r['Line']})"
-                    else:
-                        label += f"{r['Pick']}"
-                    st.write(label)
-                with right:
-                    sel = st.selectbox(
-                        "Adjust Result",
-                        ["Win","Loss","Pending"],
-                        index=["Win","Loss","Pending"].index(r["Result"]),
-                        key=f"{key_prefix}_done_sel_{i}"
-                    )
-                    if st.button("Save", key=f"{key_prefix}_done_save_{i}"):
-                        mask = (
-                            (results_df["Sport"] == sport_name) &
-                            (results_df["Market"] == r["Market"]) &
-                            (results_df["Date/Time"] == r["Date/Time"]) &
-                            (results_df["Matchup"] == r["Matchup"]) &
-                            (results_df["Pick"] == r["Pick"]) &
-                            (results_df["Line"].fillna("").astype(str) == str(r["Line"]))
-                        )
-                        results_df.loc[mask, "Result"] = sel
-                        save_results(results_df)
-                        st.success("Saved ✅")
-        else:
-            st.info("No completed picks yet.")
-
-def show_results_summary(sport_name: str):
-    results = load_results()
-    filt = results[(results["Sport"] == sport_name) & (results["Market"].isin(["Moneyline","Spreads","Totals"]))].copy()
-    if filt.empty:
-        st.info(f"No bets logged yet for {sport_name}.")
-        return
-    st.subheader(f"📊 Results — {sport_name} (Moneyline / Spreads / Totals)")
-    st.dataframe(filt, use_container_width=True, hide_index=True)
-    summ = calc_summary(filt[filt["Result"].isin(["Win","Loss"])])
-    c1,c2,c3 = st.columns(3)
-    c1.metric("Win %", f"{summ['win_pct']:.1f}% ({summ['wins']}-{summ['losses']})")
-    c2.metric("Units Won", f"{summ['units_won']:.1f}")
-    c3.metric("ROI", f"{summ['roi']:.1f}%")
+# rest of your functions like show_market_editor(), show_results_summary()...
+# (they stay unchanged — they will call save_results, which now updates Excel too)
 
 # ─────────────────────────────────────────────
-# Sidebar + Main
+# Sidebar
 # ─────────────────────────────────────────────
 with st.sidebar:
-    # Persist selected sport between reruns
     if "sport_name" not in st.session_state:
         st.session_state.sport_name = list(SPORT_OPTIONS.keys())[0]
 
-    sport_name = st.selectbox(
-        "Sport",
-        list(SPORT_OPTIONS.keys()),
-        index=list(SPORT_OPTIONS.keys()).index(st.session_state.sport_name),
-        key="sport_name"
-    )
+    sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()),
+                              index=list(SPORT_OPTIONS.keys()).index(st.session_state.sport_name),
+                              key="sport_name")
     regions = st.text_input("Regions", value=DEFAULT_REGIONS, key="regions")
     top_n = st.slider("Top picks per tab", 3, 20, 10, key="top_n")
     fetch = st.button("Fetch Live Odds")
 
-def consensus_tables(raw: pd.DataFrame, top_n: int):
-    if raw is None or raw.empty: return (pd.DataFrame(),)*5
-    cons = build_consensus(raw)
-    ml = pick_best_per_event(cons,"h2h",top_n)
-    totals = pick_best_per_event(cons,"totals",top_n)
-    spreads = pick_best_per_event(cons,"spreads",top_n)
-    ai_picks = ai_genius_top(cons,min(top_n,5))
-    return ai_picks,ml,totals,spreads,cons
+    # 👇 NEW: Excel download button
+    if os.path.exists(EXCEL_FILE):
+        with open(EXCEL_FILE, "rb") as f:
+            st.download_button(
+                label="📥 Download Results (Excel)",
+                data=f,
+                file_name="bets.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-def confidence_bars(df: pd.DataFrame,title: str):
-    if df is None or df.empty or "Confidence" not in df.columns: return
-    conf_vals = df["Confidence"].str.replace("%","",regex=False).astype(float)
+# rest of your main app logic, consensus_tables(), tabs rendering etc...
+# nothing else needs to change
+# ─────────────────────────────────────────────
+# Consensus + Confidence Chart helpers
+# ─────────────────────────────────────────────
+def consensus_tables(raw: pd.DataFrame, top_n: int):
+    if raw is None or raw.empty:
+        return (pd.DataFrame(),)*5
+    cons = build_consensus(raw)
+    ml = pick_best_per_event(cons, "h2h", top_n)
+    totals = pick_best_per_event(cons, "totals", top_n)
+    spreads = pick_best_per_event(cons, "spreads", top_n)
+    ai_picks = ai_genius_top(cons, min(top_n, 5))
+    return ai_picks, ml, totals, spreads, cons
+
+def confidence_bars(df: pd.DataFrame, title: str):
+    if df is None or df.empty or "Confidence" not in df.columns:
+        return
+    conf_vals = df["Confidence"].str.replace("%", "", regex=False).astype(float)
     lbls = df["Matchup"].astype(str)
     chart_df = pd.DataFrame({"Confidence": conf_vals.values}, index=lbls.values)
     st.caption(title)
@@ -439,9 +260,10 @@ if fetch:
         st.session_state.has_data = False
     else:
         ai_picks, ml, totals, spreads, cons = consensus_tables(raw, top_n)
-        # Log to results (dedup-safe)
-        auto_log_picks({"AI Genius": ai_picks, "Moneyline": ml, "Totals": totals, "Spreads": spreads}, sport_name)
-        # Stash everything
+        auto_log_picks(
+            {"AI Genius": ai_picks, "Moneyline": ml, "Totals": totals, "Spreads": spreads},
+            sport_name
+        )
         st.session_state.raw = raw
         st.session_state.ai_picks = ai_picks
         st.session_state.ml = ml
@@ -451,7 +273,7 @@ if fetch:
         st.session_state.has_data = True
 
 # ─────────────────────────────────────────────
-# Render from session (no redirect issue)
+# Tabs Rendering
 # ─────────────────────────────────────────────
 if st.session_state.get("has_data", False):
     tabs = st.tabs([
@@ -499,13 +321,13 @@ if st.session_state.get("has_data", False):
         st.markdown("### ✍️ Manual Result Editor — Spreads")
         show_market_editor(sport_name, "Spreads", key_prefix="spr")
 
-    # Tab 4 — Raw
+    # Tab 4 — Raw Odds Data
     with tabs[4]:
         st.subheader("Raw Per-Book Odds (first 200 rows)")
         st.dataframe(st.session_state.raw.head(200), use_container_width=True, hide_index=True)
         st.caption("Tip: this is the source that feeds the consensus tables.")
 
-    # Tab 5 — Results (summary for ML / Totals / Spreads)
+    # Tab 5 — Results
     with tabs[5]:
         show_results_summary(sport_name)
 

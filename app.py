@@ -14,7 +14,7 @@ try:
 except Exception:
     pass
 
-# ✅ Odds API Key (hardcoded for now)
+# ✅ Odds API Key
 ODDS_API_KEY = "1d677dc98d978ccc24d9914d835442f1"
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", st.secrets.get("APISPORTS_KEY", ""))
 DEFAULT_REGIONS = os.getenv("REGIONS", "us")
@@ -110,8 +110,7 @@ def fetch_odds(sport_key: str, regions: str, markets: str = "h2h,spreads,totals"
                         "conf_book": implied_prob_american(oc.get("price")),
                     })
     df = pd.DataFrame(rows)
-    if df.empty:
-        return df
+    if df.empty: return df
     df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
     if pd.api.types.is_datetime64tz_dtype(df["commence_time"]):
         df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
@@ -177,7 +176,6 @@ def ai_genius_top(cons_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
 # Results tracking + ROI
 # ─────────────────────────────────────────────
 RESULTS_FILE = "bets.csv"
-EXCEL_FILE = "bets.xlsx"
 
 def load_results() -> pd.DataFrame:
     if os.path.exists(RESULTS_FILE):
@@ -191,10 +189,51 @@ def load_results() -> pd.DataFrame:
 
 def save_results(df: pd.DataFrame):
     df.to_csv(RESULTS_FILE, index=False)
-    df.to_excel(EXCEL_FILE, index=False)   # 👈 NEW: Always also export Excel
+    df.to_excel("bets.xlsx", index=False)
 
-# rest of your functions like show_market_editor(), show_results_summary()...
-# (they stay unchanged — they will call save_results, which now updates Excel too)
+def auto_log_picks(dfs: Dict[str, pd.DataFrame], sport_name: str):
+    results = load_results()
+    for market_label, picks in dfs.items():
+        if picks is None or picks.empty:
+            continue
+        for _, row in picks.iterrows():
+            entry = {
+                "Sport": sport_name,
+                "Market": market_label,
+                "Date/Time": row.get("Date/Time",""),
+                "Matchup": row.get("Matchup",""),
+                "Pick": row.get("Pick",""),
+                "Line": row.get("Line",""),
+                "Odds (US)": row.get("Odds (US)",""),
+                "Units": float(row.get("Units",1.0)),
+                "Result": "Pending"
+            }
+            dup_mask = (
+                (results["Sport"] == entry["Sport"]) &
+                (results["Market"] == entry["Market"]) &
+                (results["Date/Time"] == entry["Date/Time"]) &
+                (results["Matchup"] == entry["Matchup"]) &
+                (results["Pick"] == entry["Pick"]) &
+                (results["Line"].fillna("").astype(str) == str(entry["Line"]))
+            )
+            if not dup_mask.any():
+                results = pd.concat([results, pd.DataFrame([entry])], ignore_index=True)
+    save_results(results)
+
+def calc_summary(df: pd.DataFrame) -> Dict[str, float]:
+    if df.empty:
+        return {"win_pct":0.0,"units_won":0.0,"roi":0.0,"wins":0,"losses":0,"total":0}
+    total = len(df)
+    wins = (df["Result"] == "Win").sum()
+    losses = (df["Result"] == "Loss").sum()
+    df = df.copy()
+    df["Risked"] = df["Units"].astype(float).abs()
+    df["PnL"] = df.apply(lambda r: r["Units"] if r["Result"]=="Win" else (-r["Units"] if r["Result"]=="Loss" else 0.0), axis=1)
+    units_won = float(df["PnL"].sum())
+    units_risked = float(df.loc[df["Result"].isin(["Win","Loss"]), "Risked"].sum())
+    roi = (units_won/units_risked*100.0) if units_risked>0 else 0.0
+    win_pct = (wins/total*100.0) if total>0 else 0.0
+    return {"win_pct":win_pct,"units_won":units_won,"roi":roi,"wins":wins,"losses":losses,"total":total}
 
 # ─────────────────────────────────────────────
 # Sidebar
@@ -202,7 +241,6 @@ def save_results(df: pd.DataFrame):
 with st.sidebar:
     if "sport_name" not in st.session_state:
         st.session_state.sport_name = list(SPORT_OPTIONS.keys())[0]
-
     sport_name = st.selectbox("Sport", list(SPORT_OPTIONS.keys()),
                               index=list(SPORT_OPTIONS.keys()).index(st.session_state.sport_name),
                               key="sport_name")
@@ -210,42 +248,38 @@ with st.sidebar:
     top_n = st.slider("Top picks per tab", 3, 20, 10, key="top_n")
     fetch = st.button("Fetch Live Odds")
 
-    # 👇 NEW: Excel download button
-    if os.path.exists(EXCEL_FILE):
-        with open(EXCEL_FILE, "rb") as f:
-            st.download_button(
-                label="📥 Download Results (Excel)",
-                data=f,
-                file_name="bets.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    st.markdown("### 📥 Download Results")
+    results = load_results()
+    if not results.empty:
+        st.download_button(
+            "Download Results (Excel)",
+            data=open("bets.xlsx","rb").read(),
+            file_name="bets.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-# rest of your main app logic, consensus_tables(), tabs rendering etc...
-# nothing else needs to change
 # ─────────────────────────────────────────────
-# Consensus + Confidence Chart helpers
+# Consensus + Rendering
 # ─────────────────────────────────────────────
 def consensus_tables(raw: pd.DataFrame, top_n: int):
-    if raw is None or raw.empty:
-        return (pd.DataFrame(),)*5
+    if raw is None or raw.empty: return (pd.DataFrame(),)*5
     cons = build_consensus(raw)
-    ml = pick_best_per_event(cons, "h2h", top_n)
-    totals = pick_best_per_event(cons, "totals", top_n)
-    spreads = pick_best_per_event(cons, "spreads", top_n)
-    ai_picks = ai_genius_top(cons, min(top_n, 5))
-    return ai_picks, ml, totals, spreads, cons
+    ml = pick_best_per_event(cons,"h2h",top_n)
+    totals = pick_best_per_event(cons,"totals",top_n)
+    spreads = pick_best_per_event(cons,"spreads",top_n)
+    ai_picks = ai_genius_top(cons,min(top_n,5))
+    return ai_picks,ml,totals,spreads,cons
 
-def confidence_bars(df: pd.DataFrame, title: str):
-    if df is None or df.empty or "Confidence" not in df.columns:
-        return
-    conf_vals = df["Confidence"].str.replace("%", "", regex=False).astype(float)
+def confidence_bars(df: pd.DataFrame,title: str):
+    if df is None or df.empty or "Confidence" not in df.columns: return
+    conf_vals = df["Confidence"].str.replace("%","",regex=False).astype(float)
     lbls = df["Matchup"].astype(str)
     chart_df = pd.DataFrame({"Confidence": conf_vals.values}, index=lbls.values)
     st.caption(title)
     st.bar_chart(chart_df)
 
 # ─────────────────────────────────────────────
-# Fetch + stash in session_state
+# Main
 # ─────────────────────────────────────────────
 if fetch:
     sport_key = SPORT_OPTIONS[sport_name]
@@ -260,10 +294,7 @@ if fetch:
         st.session_state.has_data = False
     else:
         ai_picks, ml, totals, spreads, cons = consensus_tables(raw, top_n)
-        auto_log_picks(
-            {"AI Genius": ai_picks, "Moneyline": ml, "Totals": totals, "Spreads": spreads},
-            sport_name
-        )
+        auto_log_picks({"AI Genius": ai_picks, "Moneyline": ml, "Totals": totals, "Spreads": spreads}, sport_name)
         st.session_state.raw = raw
         st.session_state.ai_picks = ai_picks
         st.session_state.ml = ml
@@ -272,9 +303,6 @@ if fetch:
         st.session_state.cons = cons
         st.session_state.has_data = True
 
-# ─────────────────────────────────────────────
-# Tabs Rendering
-# ─────────────────────────────────────────────
 if st.session_state.get("has_data", False):
     tabs = st.tabs([
         "🤖 AI Genius Picks",
@@ -285,51 +313,36 @@ if st.session_state.get("has_data", False):
         "📊 Results"
     ])
 
-    # Tab 0 — AI Genius
     with tabs[0]:
         st.subheader("AI Genius — Highest Consensus Confidence (Top)")
         st.dataframe(st.session_state.ai_picks, use_container_width=True, hide_index=True)
         confidence_bars(st.session_state.ai_picks, "Confidence heat — AI Genius")
-        st.markdown("---")
-        st.markdown("### ✍️ Manual Result Editor — AI Genius")
-        show_market_editor(sport_name, "AI Genius", key_prefix="ai")
 
-    # Tab 1 — Moneylines
     with tabs[1]:
         st.subheader("Best Moneyline per Game (Consensus)")
         st.dataframe(st.session_state.ml, use_container_width=True, hide_index=True)
         confidence_bars(st.session_state.ml, "Confidence heat — Moneylines")
-        st.markdown("---")
-        st.markdown("### ✍️ Manual Result Editor — Moneyline")
-        show_market_editor(sport_name, "Moneyline", key_prefix="ml")
 
-    # Tab 2 — Totals
     with tabs[2]:
         st.subheader("Best Totals per Game (Consensus)")
         st.dataframe(st.session_state.totals, use_container_width=True, hide_index=True)
         confidence_bars(st.session_state.totals, "Confidence heat — Totals")
-        st.markdown("---")
-        st.markdown("### ✍️ Manual Result Editor — Totals")
-        show_market_editor(sport_name, "Totals", key_prefix="tot")
 
-    # Tab 3 — Spreads
     with tabs[3]:
         st.subheader("Best Spreads per Game (Consensus)")
         st.dataframe(st.session_state.spreads, use_container_width=True, hide_index=True)
         confidence_bars(st.session_state.spreads, "Confidence heat — Spreads")
-        st.markdown("---")
-        st.markdown("### ✍️ Manual Result Editor — Spreads")
-        show_market_editor(sport_name, "Spreads", key_prefix="spr")
 
-    # Tab 4 — Raw Odds Data
     with tabs[4]:
         st.subheader("Raw Per-Book Odds (first 200 rows)")
         st.dataframe(st.session_state.raw.head(200), use_container_width=True, hide_index=True)
-        st.caption("Tip: this is the source that feeds the consensus tables.")
 
-    # Tab 5 — Results
     with tabs[5]:
-        show_results_summary(sport_name)
-
+        results = load_results()
+        st.subheader(f"📊 Results — {sport_name}")
+        if results.empty:
+            st.info("No results yet.")
+        else:
+            st.dataframe(results, use_container_width=True, hide_index=True)
 else:
     st.info("Pick a sport and click **Fetch Live Odds**")

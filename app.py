@@ -243,7 +243,6 @@ def ensemble_score(df: pd.DataFrame) -> pd.DataFrame:
 
     # V2: edge vs avg price => (best_odds_dec - avg_odds_dec) / avg_odds_dec, then normalize
     edge = (d["best_odds_dec"] - d["avg_odds_dec"]).astype(float)
-    # rough normalization: map to 0..1 by logistic squash around 0
     v2 = 1.0 / (1.0 + np.exp(-6.0 * edge.fillna(0.0)))  # edge>0 better → v2>0.5
 
     # V3: books count normalized by 10 (cap)
@@ -278,7 +277,7 @@ def pool_candidates(cons: pd.DataFrame) -> pd.DataFrame:
 
     # Nice display columns
     best["Pick"] = best["outcome"]
-    # Add display Line for spreads/totals
+
     def fmt_line(row):
         if row["market"] == "spreads":
             try:
@@ -296,6 +295,10 @@ def pool_candidates(cons: pd.DataFrame) -> pd.DataFrame:
     market_map = {"h2h": "Moneyline", "spreads": "Spreads", "totals": "Totals"}
     best["Market"] = best["market"].map(market_map)
 
+    # Ensure both 'sport' and 'Sport' exist so later code (parlays) can use either
+    if "sport" in best.columns:
+        best["Sport"] = best["sport"]
+
     # Order by ensemble score descending
     best = best.sort_values("EnsembleScore", ascending=False)
     return best
@@ -306,13 +309,19 @@ def select_top_ai(best_pool: pd.DataFrame, k: int = 5) -> pd.DataFrame:
     """
     if best_pool.empty:
         return pd.DataFrame()
-    # Hard odds filter already applied during consensus, but enforce again just in case:
+    # Enforce odds filter again just in case:
     filtered = best_pool[(best_pool["best_odds_us"] >= ODDS_MIN_US) & (best_pool["best_odds_us"] <= ODDS_MAX_US)].copy()
     top = filtered.head(k).copy()
 
     # Format final display columns
     top["Confidence"] = top["consensus_conf"].apply(fmt_pct)
-    top["Odds (US)"] = top["best_odds_us"].astype(int)
+    # Odds may be floats/NaN – make them clean
+    def safe_int(x):
+        try:
+            return int(round(float(x)))
+        except Exception:
+            return ""
+    top["Odds (US)"] = top["best_odds_us"].apply(safe_int)
     top["Odds (Dec)"] = top["best_odds_dec"].round(3)
     top = top.rename(columns={"sport": "Sport", "best_book": "Sportsbook"})
     return top[[
@@ -382,17 +391,37 @@ def build_parlays(candidate_pool: pd.DataFrame, leg_plan: List[int]) -> List[Dic
 def parlays_to_dataframe(parlays: List[Dict[str, Any]]) -> pd.DataFrame:
     """
     Flatten parlays into a nice table for display and export.
+    Tolerant to column-name casing (Sport vs sport, Market vs market).
     """
     rows = []
     for idx, p in enumerate(parlays, start=1):
         legs_rows = p["legs"]
-        # Build a text summary of legs
         leg_summaries = []
         for rr in legs_rows:
-            part = f"{rr['Sport']} • {rr['Matchup']} • {rr['Market']}: {rr['Pick']}"
-            if rr["Market"] in ["Spreads", "Totals"] and str(rr['Line']).strip() not in ["", "None", "nan"]:
-                part += f" ({rr['Line']})"
-            part += f" @ {int(rr['best_odds_us'])}"
+            # Accept both 'Sport' and 'sport', 'Market' and 'market'
+            sport_val = rr["Sport"] if "Sport" in rr and pd.notna(rr["Sport"]) else (rr["sport"] if "sport" in rr else "")
+            market_val = rr["Market"] if "Market" in rr and pd.notna(rr["Market"]) else (rr["market"] if "market" in rr else "")
+            matchup_val = rr["Matchup"] if "Matchup" in rr else ""
+            pick_val = rr["Pick"] if "Pick" in rr else rr.get("outcome", "")
+            line_val = rr["Line"] if "Line" in rr else rr.get("line", "")
+
+            # Odds for leg: prefer 'Odds (US)' if present, else fallback to best_odds_us
+            if "Odds (US)" in rr and str(rr["Odds (US)"]).strip() != "":
+                try:
+                    odds_us = int(round(float(rr["Odds (US)"])))
+                except Exception:
+                    odds_us = ""
+            else:
+                try:
+                    odds_us = int(round(float(rr.get("best_odds_us", ""))))
+                except Exception:
+                    odds_us = ""
+
+            part = f"{sport_val} • {matchup_val} • {market_val}: {pick_val}"
+            if str(line_val).strip() not in ["", "None", "nan"] and market_val in ["Spreads", "Totals"]:
+                part += f" ({line_val})"
+            if odds_us != "":
+                part += f" @ {odds_us}"
             leg_summaries.append(part)
 
         rows.append({
@@ -465,7 +494,6 @@ def export_excel(ai5: pd.DataFrame, parlays_df: pd.DataFrame, results_df: pd.Dat
       - Results
     Returns the binary content.
     """
-    # Don’t crash if openpyxl not installed — user added it to requirements, but still…
     try:
         with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
             # Sheet 1: AI picks
@@ -475,7 +503,6 @@ def export_excel(ai5: pd.DataFrame, parlays_df: pd.DataFrame, results_df: pd.Dat
                     "Odds (US)": "Odds_US",
                     "Odds (Dec)": "Odds_Dec",
                 })
-                # Add editable Result column (user can fill Win/Loss in Excel)
                 if "Result" not in ai_out.columns:
                     ai_out["Result"] = ""
                 ai_out.to_excel(writer, index=False, sheet_name="AI_Picks")
@@ -491,11 +518,9 @@ def export_excel(ai5: pd.DataFrame, parlays_df: pd.DataFrame, results_df: pd.Dat
             # Sheet 3: Results (running log)
             results_df.to_excel(writer, index=False, sheet_name="Results")
 
-        # Read back to bytes for download button
         with open(EXCEL_FILE, "rb") as f:
             return f.read()
     except Exception:
-        # Fallback: return an in-memory Excel via BytesIO (if file system blocked)
         from io import BytesIO
         bio = BytesIO()
         with pd.ExcelWriter(bio, engine="openpyxl") as writer:

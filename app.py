@@ -1,31 +1,34 @@
-# app.py
 import os
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
-from datetime import datetime, timedelta, timezone
 
 # ─────────────────────────────────────────────
-# Page / Header
+# Safe dotenv
 # ─────────────────────────────────────────────
-st.set_page_config(page_title="TruLine – AI Moneylines & Parlays", layout="wide")
-st.title("TruLine – AI Moneylines & Parlays 🚀")
-st.caption("Each sport: ALL moneyline picks (next 7 days) + a 5-leg parlay from the top ML edges.")
-st.divider()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 # ─────────────────────────────────────────────
 # Config & Keys
 # ─────────────────────────────────────────────
-# Odds API key (env or fallback literal)
-ODDS_API_KEY = os.getenv("ODDS_API_KEY", "").strip() or "1d677dc98d978ccc24d9914d835442f1"
-DEFAULT_REGIONS = os.getenv("REGIONS", "us").strip() or "us"
+st.set_page_config(page_title="TruLine – Weekly ML Picks + Parlays", layout="wide")
+st.title("TruLine – Weekly Moneyline Picks + Parlays 🚀")
+st.caption("Each sport: AI moneyline for every game + a parlay. All picks append to one Excel file with live formulas.")
+st.divider()
 
-# We only use moneylines for this build
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "") or "1d677dc98d978ccc24d9914d835442f1"
+DEFAULT_REGIONS = os.getenv("REGIONS", "us")  # e.g., "us,eu,uk" if you want to mix
+
+# We only use moneyline (h2h) for this app
 MARKETS = "h2h"
 
-# Sports enabled (Soccer is a bundle of leagues)
+# Enabled sports
 SOCCER_KEYS = [
     "soccer_epl",
     "soccer_spain_la_liga",
@@ -41,17 +44,15 @@ SPORT_OPTIONS: Dict[str, Any] = {
     "MLB": "baseball_mlb",
     "NCAAF": "americanfootball_ncaaf",
     "NCAAB": "basketball_ncaab",
-    "Soccer": SOCCER_KEYS,  # aggregated
+    "Soccer (All Major Leagues)": SOCCER_KEYS,
 }
 
-# Odds sanity filter: ignore ridiculous prices (keeps books' mistakes from breaking output)
+# Filter absurd lines (requested)
 ODDS_MIN_US = -2000
 ODDS_MAX_US = 2000
 
-# Ensemble → Units mapping (0.5 .. 5.0)
-def assign_units_from_score(score: float) -> float:
-    score = max(0.0, min(1.0, float(score)))
-    return round(0.5 + 4.5 * score, 1)
+# Storage
+RESULTS_XLSX = "results.xlsx"
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -62,14 +63,6 @@ def american_to_decimal(odds: Optional[float]) -> float:
     o = float(odds)
     return 1.0 + (o / 100.0) if o > 0 else 1.0 + (100.0 / abs(o))
 
-def decimal_to_american(dec: float) -> Optional[int]:
-    if dec is None or pd.isna(dec) or dec <= 1.0:
-        return None
-    if dec >= 2.0:
-        return int(round((dec - 1.0) * 100))
-    else:
-        return int(round(-100.0 / (dec - 1.0)))
-
 def implied_prob_american(odds: Optional[float]) -> float:
     if odds is None or pd.isna(odds):
         return np.nan
@@ -77,13 +70,25 @@ def implied_prob_american(odds: Optional[float]) -> float:
     return 100.0 / (o + 100.0) if o > 0 else abs(o) / (abs(o) + 100.0)
 
 def fmt_pct(x: float) -> str:
-    try:
-        return f"{100.0 * float(x):.1f}%"
-    except Exception:
-        return ""
+    return "" if (x is None or pd.isna(x)) else f"{100.0 * x:.1f}%"
 
+def assign_units_from_score(score: float) -> float:
+    score = max(0.0, min(1.0, float(score)))
+    return round(0.5 + 4.5 * score, 1)
+
+def decimal_to_american(dec: float) -> Optional[int]:
+    if dec is None or pd.isna(dec) or dec <= 1.0:
+        return None
+    # dec odds → US odds
+    if dec >= 2.0:
+        return int(round((dec - 1.0) * 100))
+    else:
+        return int(round(-100.0 / (dec - 1.0)))
+
+# ─────────────────────────────────────────────
+# Odds API
+# ─────────────────────────────────────────────
 def _odds_get(url: str, params: Dict[str, Any]) -> Optional[Any]:
-    """Basic GET with Odds API key."""
     if not ODDS_API_KEY:
         st.error("Missing ODDS_API_KEY.")
         return None
@@ -91,18 +96,13 @@ def _odds_get(url: str, params: Dict[str, Any]) -> Optional[Any]:
         r = requests.get(url, params=params, timeout=30)
         if r.status_code == 200:
             return r.json()
-        return None
+        else:
+            return None
     except Exception:
         return None
 
-# ─────────────────────────────────────────────
-# Fetch odds (moneylines only)
-# ─────────────────────────────────────────────
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120)
 def fetch_odds(sport_key: str, regions: str, markets: str = MARKETS) -> pd.DataFrame:
-    """
-    Fetch moneyline odds for a single sport key.
-    """
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     data = _odds_get(url, {
         "apiKey": ODDS_API_KEY,
@@ -125,7 +125,6 @@ def fetch_odds(sport_key: str, regions: str, markets: str = MARKETS) -> pd.DataF
                 if mk.get("key") != "h2h":
                     continue
                 for oc in mk.get("outcomes", []):
-                    # outcome is "Home" / "Away" team string
                     rows.append({
                         "sport_key": sport_key,
                         "event_id": event_id,
@@ -134,8 +133,8 @@ def fetch_odds(sport_key: str, regions: str, markets: str = MARKETS) -> pd.DataF
                         "away_team": away,
                         "book": book,
                         "market": "h2h",
-                        "outcome": oc.get("name"),
-                        "line": None,  # not used for ML
+                        "outcome": oc.get("name"),   # "Home" or "Away"
+                        "line": None,                 # ML has no line
                         "odds_american": oc.get("price"),
                         "odds_decimal": american_to_decimal(oc.get("price")),
                         "conf_book": implied_prob_american(oc.get("price")),
@@ -144,262 +143,358 @@ def fetch_odds(sport_key: str, regions: str, markets: str = MARKETS) -> pd.DataF
     if df.empty:
         return df
 
-    # Parse / format time
-    df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce", utc=True)
-    # Human-readable Eastern
-    df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
+    df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
+    if pd.api.types.is_datetime64tz_dtype(df["commence_time"]):
+        df["Date/Time"] = df["commence_time"].dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
+    else:
+        df["Date/Time"] = df["commence_time"].dt.tz_localize("UTC").dt.tz_convert("US/Eastern").dt.strftime("%b %d, %I:%M %p ET")
     return df
 
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_sport(label: str, sport_value: Any, regions: str) -> pd.DataFrame:
-    """
-    Fetch for a sport label that is either a single key or a list of keys (e.g., Soccer).
-    Adds 'sport_label' column for downstream filtering.
-    """
-    frames = []
-    if isinstance(sport_value, list):
-        for sub in sport_value:
-            df = fetch_odds(sub, regions)
-            if not df.empty:
-                df["sport_label"] = label
-                frames.append(df)
+def fetch_sport(label: str, s) -> pd.DataFrame:
+    if isinstance(s, list):
+        frames = []
+        for sub in s:
+            d = fetch_odds(sub, st.session_state.regions)
+            if not d.empty:
+                d["sport_label"] = label
+                frames.append(d)
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     else:
-        df = fetch_odds(sport_value, regions)
-        if not df.empty:
-            df["sport_label"] = label
-            frames.append(df)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        d = fetch_odds(s, st.session_state.regions)
+        if not d.empty:
+            d["sport_label"] = label
+        return d
 
 # ─────────────────────────────────────────────
-# Consensus (moneylines)
+# Consensus + Ensemble (simple ML only)
 # ─────────────────────────────────────────────
 def build_consensus_ml(raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Consensus per (event, outcome) for moneylines — keep best price per side,
-    and compute aggregate stats.
-    """
     if raw.empty:
         return raw
 
-    # Best price row index per group (event + outcome)
-    idx_best = raw.groupby(["event_id", "outcome"])["odds_decimal"].idxmax()
-    best = raw.loc[idx_best, ["event_id", "outcome", "odds_american", "odds_decimal", "book"]]
+    # Best price per (event, outcome)
+    idx_best = raw.groupby(["event_id", "market", "outcome"])["odds_decimal"].idxmax()
+    best = raw.loc[idx_best, ["event_id","market","outcome","odds_american","odds_decimal","book"]]
     best = best.rename(columns={
-        "odds_american": "best_odds_us",
-        "odds_decimal": "best_odds_dec",
-        "book": "best_book"
+        "odds_american":"best_odds_us",
+        "odds_decimal":"best_odds_dec",
+        "book":"best_book"
     })
 
-    agg = raw.groupby(["event_id", "outcome"], dropna=False).agg(
-        consensus_conf=("conf_book", "mean"),
-        books=("book", "nunique"),
-        home_team=("home_team", "first"),
-        away_team=("away_team", "first"),
-        commence_time=("commence_time", "first"),
-        date_time=("Date/Time", "first"),
-        sport=("sport_label", "first"),
-        sport_key=("sport_key", "first"),
-        avg_odds_dec=("odds_decimal", "mean"),
+    agg = raw.groupby(["event_id","market","outcome"], dropna=False).agg(
+        consensus_conf=("conf_book","mean"),
+        books=("book","nunique"),
+        home_team=("home_team","first"),
+        away_team=("away_team","first"),
+        commence_time=("commence_time","first"),
+        date_time=("Date/Time","first"),
+        sport=("sport_label","first"),
+        avg_odds_dec=("odds_decimal","mean"),
     ).reset_index()
 
-    out = agg.merge(best, on=["event_id", "outcome"], how="left")
-
-    # Human fields
+    out = agg.merge(best, on=["event_id","market","outcome"], how="left")
     out["Matchup"] = out["home_team"] + " vs " + out["away_team"]
     out["Date/Time"] = out["date_time"]
-    out["market"] = "h2h"
 
-    # Odds sanity filter
+    # Filter insane odds
     out = out[(out["best_odds_us"] >= ODDS_MIN_US) & (out["best_odds_us"] <= ODDS_MAX_US)]
 
     return out[[
-        "sport", "sport_key", "event_id", "commence_time", "Date/Time",
-        "Matchup", "market", "outcome",
-        "best_book", "best_odds_us", "best_odds_dec", "consensus_conf", "books", "avg_odds_dec"
+        "sport","event_id","commence_time","Date/Time","Matchup","market","outcome",
+        "best_book","best_odds_us","best_odds_dec","consensus_conf","books","avg_odds_dec"
     ]]
 
-# ─────────────────────────────────────────────
-# Ensemble “argumentation” score (4 voters)
-# ─────────────────────────────────────────────
-def ensemble_score(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    V1: Probability voter — higher implied prob (consensus_conf) → better
-    V2: Edge vs avg price — (best_odds_dec - avg_odds_dec), sigmoided
-    V3: Market depth — more books → more confidence (cap at 10)
-    V4: Balance — best_odds_dec closer to 2.0 (evens) gets a small bump
-    """
+def ensemble_score_ml(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.copy()
-
     d = df.copy()
 
-    # V1
+    # Voters
     v1 = d["consensus_conf"].astype(float).fillna(0.0).clip(0.0, 1.0)
-
-    # V2
     edge = (d["best_odds_dec"] - d["avg_odds_dec"]).astype(float).fillna(0.0)
-    v2 = 1.0 / (1.0 + np.exp(-6.0 * edge))  # edge>0 gives >0.5
-
-    # V3
-    v3 = (d["books"].astype(float).clip(lower=0.0, upper=10.0)) / 10.0
-
-    # V4
+    v2 = 1.0 / (1.0 + np.exp(-6.0 * edge))
+    v3 = (d["books"].astype(float).clip(0.0, 10.0)) / 10.0
     dec = d["best_odds_dec"].astype(float).fillna(2.0)
-    v4_raw = np.exp(-((dec - 2.0) ** 2) / (2 * (0.6 ** 2)))  # N(2.0, 0.6)
-    v4 = (v4_raw - v4_raw.min()) / (v4_raw.max() - v4_raw.min() + 1e-9)
+    v4 = np.exp(-((dec - 2.0) ** 2) / (2 * (0.6 ** 2)))
+    v4 = (v4 - v4.min()) / (v4.max() - v4.min() + 1e-9)
 
+    d["V1_prob"] = v1
+    d["V2_edge"] = v2
+    d["V3_depth"] = v3
+    d["V4_balance"] = v4
     d["EnsembleScore"] = (v1 + v2 + v3 + v4) / 4.0
     d["Units"] = d["EnsembleScore"].apply(assign_units_from_score)
     return d
 
-# ─────────────────────────────────────────────
-# Build per-sport Moneyline picks for next 7 days
-# ─────────────────────────────────────────────
-def moneyline_picks_next7_for_sport(sport_label: str, regions: str) -> pd.DataFrame:
+def pick_side_for_game(scored: pd.DataFrame) -> pd.DataFrame:
     """
-    Fetch raw for this sport label, build consensus, ensemble score,
-    pick one moneyline per event (higher score between the two sides),
-    and return ALL games in next 7 days.
+    From (event, outcome in {Home, Away}), keep the better score as the pick.
     """
-    raw = fetch_sport(sport_label, SPORT_OPTIONS[sport_label], regions)
-    if raw.empty:
+    if scored.empty:
         return pd.DataFrame()
+    idx = scored.groupby(["event_id"])["EnsembleScore"].idxmax()
+    best = scored.loc[idx].copy()
+    best["Market"] = "Moneyline"
+    best["Pick"] = best["outcome"]
+    best["Odds (US)"] = best["best_odds_us"].astype(int)
+    best["Odds (Dec)"] = best["best_odds_dec"].round(3)
+    best["Confidence"] = best["consensus_conf"].apply(fmt_pct)
+    best = best.rename(columns={"sport": "Sport", "best_book": "Sportsbook"})
+    return best[[
+        "Date/Time","Sport","Matchup","Market","Pick","Sportsbook","Odds (US)","Odds (Dec)",
+        "Confidence","Units","EnsembleScore","event_id"
+    ]].sort_values("Date/Time").reset_index(drop=True)
 
-    # Filter to next 7 days only (UTC)
-    now_utc = datetime.now(timezone.utc)
-    end_utc = now_utc + timedelta(days=7)
-    raw = raw[(raw["commence_time"] >= now_utc) & (raw["commence_time"] <= end_utc)].copy()
-    if raw.empty:
-        return pd.DataFrame()
-
-    cons = build_consensus_ml(raw)
-    if cons.empty:
-        return pd.DataFrame()
-
-    scored = ensemble_score(cons)
-
-    # For each event, keep the higher-scored side (Home vs Away)
-    idx = scored.groupby("event_id")["EnsembleScore"].idxmax()
-    best_side = scored.loc[idx].copy()
-
-    # Display formatting
-    best_side = best_side.sort_values("commence_time", ascending=True)
-    best_side["Sport"] = best_side["sport"]
-    best_side["Market"] = "Moneyline"
-    best_side["Pick"] = best_side["outcome"]
-    best_side["Line"] = ""  # not applicable for ML
-    best_side["Odds (US)"] = best_side["best_odds_us"].astype(int)
-    best_side["Odds (Dec)"] = best_side["best_odds_dec"].round(3)
-    best_side["Confidence"] = best_side["consensus_conf"].apply(fmt_pct)
-    best_side = best_side[[
-        "Date/Time", "Sport", "Matchup", "Market", "Pick", "Line",
-        "best_book", "Odds (US)", "Odds (Dec)", "Confidence", "Units",
-        "EnsembleScore", "event_id"
-    ]]
-    best_side = best_side.rename(columns={"best_book": "Sportsbook"})
-    return best_side.reset_index(drop=True)
-
-# ─────────────────────────────────────────────
-# Build a single 5-leg parlay for a sport from its ranks
-# ─────────────────────────────────────────────
-def build_5_leg_parlay_from_picks(picks_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    From the sport's ML table, take the top 5 by EnsembleScore with unique event_ids.
-    Compute parlay odds and present a 1-row summary + legs breakdown table (2 dataframes).
-    Returns a single dataframe that lists legs and adds a summary footer row.
-    """
-    if picks_df is None or picks_df.empty:
-        return pd.DataFrame()
-
-    # Sort by score (desc) and ensure unique events
-    ranked = picks_df.sort_values("EnsembleScore", ascending=False).copy()
-    ranked = ranked.drop_duplicates(subset=["event_id"], keep="first")
-
-    legs = ranked.head(5).copy()
-    if legs.empty:
-        return pd.DataFrame()
-
-    # Compute parlay decimal odds
-    decs = legs["Odds (Dec)"].astype(float).replace([np.nan, 0.0], 1.01)
-    parlay_dec = float(np.prod(decs.values))
-    parlay_us = decimal_to_american(parlay_dec)
-
-    # Suggested units: modest risk, scale by avg units of legs
-    suggested_units = round(max(0.5, min(5.0, legs["Units"].astype(float).mean() * 1.0)), 1)
-
-    # Legs table for display
-    legs_display = legs[[
-        "Date/Time", "Matchup", "Pick", "Sportsbook", "Odds (US)", "Odds (Dec)", "Units"
-    ]].copy()
-    legs_display.insert(0, "Leg #", list(range(1, len(legs_display) + 1)))
-
-    # Add a final "summary" row as a separator
-    summary_row = {
-        "Leg #": "TOTAL",
-        "Date/Time": "",
-        "Matchup": f"Parlay of {len(legs_display)} legs",
-        "Pick": "",
-        "Sportsbook": "",
-        "Odds (US)": parlay_us if parlay_us is not None else "",
-        "Odds (Dec)": round(parlay_dec, 4),
-        "Units": suggested_units
+def build_moneyline_parlay(picks: pd.DataFrame, max_legs: int = 8) -> Optional[Dict[str, Any]]:
+    if picks is None or picks.empty:
+        return None
+    top = picks.copy().sort_values("EnsembleScore", ascending=False).head(max_legs)
+    if top.empty:
+        return None
+    dec_odds = 1.0
+    units = 0.0
+    for _, r in top.iterrows():
+        d = float(r["Odds (Dec)"])
+        if d <= 1.0 or pd.isna(d):
+            d = 1.01
+        dec_odds *= d
+        units += float(r["Units"])
+    return {
+        "legs": len(top),
+        "parlay_decimal": round(dec_odds, 4),
+        "parlay_american": decimal_to_american(dec_odds),
+        "suggested_units": round(max(0.5, min(5.0, units * 0.4)), 1),
+        "legs_df": top.reset_index(drop=True)
     }
-    legs_display = pd.concat([legs_display, pd.DataFrame([summary_row])], ignore_index=True)
-    return legs_display
 
 # ─────────────────────────────────────────────
-# Sidebar Controls
+# Excel Append (one sheet, formulas at top)
+# ─────────────────────────────────────────────
+RESULTS_COLUMNS = [
+    "Date/Time","Sport","Matchup","Market","Pick","Odds_US","Odds_Dec","Units","Result"
+]
+
+def ensure_results_headers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure dataframe has Excel output columns in correct order.
+    """
+    out = pd.DataFrame(columns=RESULTS_COLUMNS)
+    if df is None or df.empty:
+        return out
+    tmp = df.rename(columns={
+        "Odds (US)":"Odds_US",
+        "Odds (Dec)":"Odds_Dec"
+    }).copy()
+    for col in RESULTS_COLUMNS:
+        if col not in tmp.columns:
+            tmp[col] = ""
+    tmp = tmp[RESULTS_COLUMNS].copy()
+    tmp["Units"] = pd.to_numeric(tmp["Units"], errors="coerce").fillna(1.0)
+    tmp["Result"] = tmp["Result"].fillna("") if "Result" in tmp.columns else ""
+    return tmp
+
+def read_results_excel() -> pd.DataFrame:
+    if not os.path.exists(RESULTS_XLSX):
+        return pd.DataFrame(columns=RESULTS_COLUMNS)
+    try:
+        x = pd.read_excel(RESULTS_XLSX, sheet_name="Results")
+        # drop the first two rows if they are the summary header/formula rows
+        # Heuristic: first two rows do not match the columns; or contain "SUMMARY"
+        if len(x) >= 1 and ("SUMMARY" in str(x.iloc[0,0]).upper() or "LABEL" in str(x.iloc[0,0]).upper()):
+            # This happens if someone edited the sheet incorrectly—fallback: reload with header=2
+            x = pd.read_excel(RESULTS_XLSX, sheet_name="Results", header=2)
+        x = x.rename(columns={"Odds (US)":"Odds_US","Odds (Dec)":"Odds_Dec"})
+        for col in RESULTS_COLUMNS:
+            if col not in x.columns:
+                x[col] = "" if col not in ["Units"] else 1.0
+        return x[RESULTS_COLUMNS].copy()
+    except Exception:
+        return pd.DataFrame(columns=RESULTS_COLUMNS)
+
+def write_results_excel(all_rows: pd.DataFrame):
+    """
+    Writes the entire Results sheet and places summary formulas in row 1/2.
+    """
+    # We will write with a blank first two rows reserved for formulas.
+    # Strategy: write data starting at row=3 (header in row=3)
+    from openpyxl import load_workbook, Workbook
+    from openpyxl.utils.dataframe import dataframe_to_rows
+
+    # Create workbook or load existing
+    if os.path.exists(RESULTS_XLSX):
+        try:
+            wb = load_workbook(RESULTS_XLSX)
+        except Exception:
+            wb = Workbook()
+    else:
+        wb = Workbook()
+
+    # Remove existing "Results" sheet if exists
+    if "Results" in wb.sheetnames:
+        ws = wb["Results"]
+        wb.remove(ws)
+    ws = wb.create_sheet("Results")
+
+    # Row 1: labels + formulas across columns B..G
+    ws["A1"].value = "SUMMARY"
+    ws["B1"].value = "Total"
+    ws["C1"].value = "Wins"
+    ws["D1"].value = "Losses"
+    ws["E1"].value = "Win %"
+    ws["F1"].value = "Units Won"
+    ws["G1"].value = "ROI"
+
+    # Row 2: formulas using full columns (Result is I, Units is H)
+    ws["B2"].value = '=COUNTA(A:A)-2'
+    ws["C2"].value = '=COUNTIF(I:I,"Win")'
+    ws["D2"].value = '=COUNTIF(I:I,"Loss")'
+    ws["E2"].value = '=IFERROR(C2/(C2+D2),0)'
+    ws["F2"].value = '=(SUMPRODUCT((I3:I="Win")*(H3:H)) - SUMPRODUCT((I3:I="Loss")*(H3:H)))'
+    ws["G2"].value = '=IFERROR(F2 / SUMPRODUCT(((I3:I="Win")+(I3:I="Loss"))*(H3:H)),0)'
+
+    # Leave row 2 otherwise blank; write header at row=3, then data from row=4
+    # Write header
+    for j, col in enumerate(RESULTS_COLUMNS, start=1):
+        ws.cell(row=3, column=j).value = col
+
+    # Write data rows
+    if not all_rows.empty:
+        for r in dataframe_to_rows(all_rows, index=False, header=False):
+            ws.append(r)
+
+    # If workbook had default "Sheet", remove it
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+        wb.remove(wb["Sheet"])
+
+    wb.save(RESULTS_XLSX)
+
+def append_picks_to_excel(picks_df: pd.DataFrame):
+    """
+    Read current Results, append deduped, and write with formulas.
+    """
+    current = read_results_excel()
+    to_add = ensure_results_headers(picks_df)
+    if to_add.empty:
+        # nothing to add → still ensure the file has formulas
+        write_results_excel(current)
+        return
+
+    all_rows = pd.concat([current, to_add], ignore_index=True)
+    # Dedup on identity keys (Date/Time,Sport,Matchup,Market,Pick)
+    all_rows = all_rows.drop_duplicates(subset=["Date/Time","Sport","Matchup","Market","Pick"], keep="first")
+    # Keep chronological
+    all_rows = all_rows.copy()
+    # Date/Time is a string; leave as is to avoid TZ issues
+    write_results_excel(all_rows)
+
+# ─────────────────────────────────────────────
+# Sidebar controls
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.subheader("Controls")
-    regions = st.text_input("Odds Regions", value=DEFAULT_REGIONS, help="e.g., us, eu, uk, au")
-    st.write("**Window**: Next 7 days (auto)")
-    st.write("**Parlay size**: 5 legs (fixed)")
-    run = st.button("Fetch / Refresh")
+    st.session_state.regions = st.text_input("Regions", value=DEFAULT_REGIONS)
+    # Parlay legs per sport (min 3, max 10-ish; you asked ~3–10)
+    parlay_legs = st.slider("Parlay legs per sport", 3, 10, 5)
+    generate = st.button("Generate Weekly Picks")
 
 # ─────────────────────────────────────────────
-# Generate (on click) and stash in session
+# Generate per-sport ML picks + parlays; append to Excel
 # ─────────────────────────────────────────────
-if run:
-    st.session_state.results = {}
-    for label in ["NFL", "NBA", "MLB", "NCAAF", "NCAAB", "Soccer"]:
-        picks = moneyline_picks_next7_for_sport(label, regions)
-        parlay = build_5_leg_parlay_from_picks(picks)
-        st.session_state.results[label] = {
-            "picks": picks,
-            "parlay": parlay
-        }
+if generate:
+    st.session_state.all_sport_picks = {}
+    st.session_state.all_sport_parlays = {}
+    st.session_state.all_for_excel = []
+
+    for label, key in SPORT_OPTIONS.items():
+        raw = fetch_sport(label, key)
+        if raw.empty:
+            st.session_state.all_sport_picks[label] = pd.DataFrame()
+            st.session_state.all_sport_parlays[label] = None
+            continue
+
+        cons = build_consensus_ml(raw)
+        if cons.empty:
+            st.session_state.all_sport_picks[label] = pd.DataFrame()
+            st.session_state.all_sport_parlays[label] = None
+            continue
+
+        scored = ensemble_score_ml(cons)
+        picks = pick_side_for_game(scored)  # ML pick for every game in that sport
+        st.session_state.all_sport_picks[label] = picks
+
+        parlay = build_moneyline_parlay(picks, max_legs=parlay_legs)
+        st.session_state.all_sport_parlays[label] = parlay
+
+        if not picks.empty:
+            # Prepare for Excel append
+            x = picks.rename(columns={"Odds (US)":"Odds_US","Odds (Dec)":"Odds_Dec"}).copy()
+            x["Market"] = "Moneyline"
+            x["Result"] = ""  # user will mark Win/Loss in Excel later
+            x = x[["Date/Time","Sport","Matchup","Market","Pick","Odds_US","Odds_Dec","Units","Result"]]
+            st.session_state.all_for_excel.append(x)
+
+    # Append all picks from all sports to Excel (one sheet)
+    if st.session_state.all_for_excel:
+        all_new_rows = pd.concat(st.session_state.all_for_excel, ignore_index=True)
+        append_picks_to_excel(all_new_rows)
+    else:
+        # Still ensure file exists and has formulas
+        append_picks_to_excel(pd.DataFrame(columns=RESULTS_COLUMNS))
+
     st.session_state.has_data = True
 
 # ─────────────────────────────────────────────
-# Render Tabs
+# Render tabs per sport
 # ─────────────────────────────────────────────
 if st.session_state.get("has_data", False):
-    tabs = st.tabs(list(SPORT_OPTIONS.keys()))
+    tabs = st.tabs(list(SPORT_OPTIONS.keys()) + ["📥 Export"])
 
-    for tab, label in zip(tabs, SPORT_OPTIONS.keys()):
-        with tab:
-            st.markdown(f"## {label}")
-
-            # Moneyline picks table
-            st.markdown("### 🧠 AI Moneyline Picks (next 7 days)")
-            picks_df = st.session_state.results.get(label, {}).get("picks", pd.DataFrame())
-            if picks_df is None or picks_df.empty:
-                st.info("No games found for the next 7 days.")
+    # Per sport tabs
+    for idx, label in enumerate(SPORT_OPTIONS.keys()):
+        with tabs[idx]:
+            st.subheader(f"{label} — Moneyline Picks (this week)")
+            picks = st.session_state.all_sport_picks.get(label, pd.DataFrame())
+            if picks is None or picks.empty:
+                st.info("No picks found.")
             else:
-                show = picks_df.copy()
-                # Make the score pretty
-                show["EnsembleScore"] = show["EnsembleScore"].map(lambda x: f"{float(x):.3f}")
+                show = picks.copy()
+                show = show.rename(columns={"EnsembleScore":"Score"})
+                show["Score"] = show["Score"].map(lambda x: f"{float(x):.3f}")
                 st.dataframe(show.drop(columns=["event_id"]), use_container_width=True, hide_index=True)
 
             st.markdown("---")
-
-            # Parlay table
-            st.markdown("### 🎯 Suggested 5-Leg Parlay")
-            parlay_df = st.session_state.results.get(label, {}).get("parlay", pd.DataFrame())
-            if parlay_df is None or parlay_df.empty:
-                st.info("Could not build a 5-leg parlay from current odds.")
+            st.subheader(f"{label} — Suggested Parlay")
+            parlay = st.session_state.all_sport_parlays.get(label)
+            if parlay is None:
+                st.info("No parlay could be built.")
             else:
-                st.dataframe(parlay_df, use_container_width=True, hide_index=True)
+                c1,c2,c3 = st.columns(3)
+                c1.metric("Legs", str(parlay["legs"]))
+                c2.metric("Parlay Odds (Dec)", str(parlay["parlay_decimal"]))
+                c3.metric("Suggested Units", str(parlay["suggested_units"]))
+                st.caption(f"Parlay Odds (US): {parlay['parlay_american'] if parlay['parlay_american'] is not None else 'N/A'}")
+
+                with st.expander("Show Parlay Legs"):
+                    legs_df = parlay["legs_df"].rename(columns={"EnsembleScore":"Score"}).copy()
+                    legs_df["Score"] = legs_df["Score"].map(lambda x: f"{float(x):.3f}")
+                    st.dataframe(legs_df.drop(columns=["event_id"]), use_container_width=True, hide_index=True)
+
+    # Export tab
+    with tabs[-1]:
+        st.subheader("Results Excel (one sheet)")
+        st.write("• All picks append to **results.xlsx → Results**")
+        st.write("• Mark the **Result** column (Win/Loss) in Excel; summary formulas at the top auto-update.")
+        # Offer download of current file contents (if exists)
+        if os.path.exists(RESULTS_XLSX):
+            with open(RESULTS_XLSX, "rb") as f:
+                data = f.read()
+            st.download_button(
+                "Download results.xlsx",
+                data=data,
+                file_name="results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("No results.xlsx yet. Generate picks first.")
 else:
-    st.info("Click **Fetch / Refresh** in the sidebar to populate each sport’s tab.")
+    st.info("Click **Generate Weekly Picks** in the sidebar.")

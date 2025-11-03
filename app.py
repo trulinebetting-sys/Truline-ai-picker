@@ -158,12 +158,21 @@ def fetch_sport(label: str, s) -> pd.DataFrame:
             if not d.empty:
                 d["sport_label"] = label
                 frames.append(d)
-        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        raw = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     else:
-        d = fetch_odds(s, st.session_state.regions)
-        if not d.empty:
-            d["sport_label"] = label
-        return d
+        raw = fetch_odds(s, st.session_state.regions)
+        if not raw.empty:
+            raw["sport_label"] = label
+
+    if raw.empty:
+        return raw
+
+    # ✅ filter to next 7 days only
+    now = pd.Timestamp.utcnow()
+    future_7 = now + pd.Timedelta(days=7)
+    raw = raw[(raw["commence_time"] >= now) & (raw["commence_time"] <= future_7)]
+
+    return raw
 
 # ─────────────────────────────────────────────
 # Consensus + Ensemble (simple ML only)

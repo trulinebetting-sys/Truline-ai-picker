@@ -488,46 +488,25 @@ if st.session_state.get("has_data", False):
                     legs_df["Score"] = legs_df["Score"].map(lambda x: f"{float(x):.3f}")
                     st.dataframe(legs_df.drop(columns=["event_id"]), use_container_width=True, hide_index=True)
 
-# ──────────────────────────────────
-# Manual Result Counter (simple editable)
-# ──────────────────────────────────
-with tabs.insert(len(SPORT_OPTIONS), "Update Results"):
-    st.subheader("Update Results — Wins / Losses Per Sport")
 
-    # load excel
-    results_df = read_results_excel().copy()
+    # ──────────────────────────────────
+    # Manual Result Counter (simple editable)
+    # ──────────────────────────────────
+    with tabs[-2]:
+        st.subheader("Update Results — Wins / Losses Per Sport")
 
-    # if no results yet
-    if results_df.empty:
-        st.info("No picks saved yet — generate picks first.")
-    else:
-        # this will hold updated records
-        modified = False
+        results_df = read_results_excel().copy()
 
-        # loop each sport and count current wins/losses
-        for sport in SPORT_OPTIONS.keys():
+        if results_df.empty:
+            st.info("No picks saved yet — generate picks first.")
+        else:
+            for sport in SPORT_OPTIONS.keys():
+                sport_df = results_df[results_df["Sport"] == sport]
+                wins = (sport_df["Result"] == "Win").sum()
+                losses = (sport_df["Result"] == "Loss").sum()
+                current = f"{wins}-{losses}"
+                st.text_input(f"{sport} (Wins-Losses)", current, key=f"{sport}_wl")
 
-            sport_df = results_df[results_df["Sport"] == sport]
-
-            wins = (sport_df["Result"] == "Win").sum()
-            losses = (sport_df["Result"] == "Loss").sum()
-
-            # editable text
-            current = f"{wins}-{losses}"
-
-            new_val = st.text_input(f"{sport} (Wins-Losses)", current, key=f"{sport}_wl")
-
-            if new_val != current:
-                # user changed it
-                # store as metadata row for the sport
-                # (we do NOT overwrite individual picks)
-                # optional: write to a sport meta sheet later
-                st.session_state[f"{sport}_manual_wl"] = new_val
-                modified = True
-
-        if st.button("Save WL Counts"):
-            # just ack it — nothing else being overwritten
-            st.success("Saved ✅")
 
     # ──────────────────────────────────
     # Export Tab
@@ -535,7 +514,7 @@ with tabs.insert(len(SPORT_OPTIONS), "Update Results"):
     with tabs[-1]:
         st.subheader("Results Excel (one sheet)")
         st.write("• All picks append to **results.xlsx → Results**")
-        st.write("• Mark the **Result** column (Win/Loss) in Excel; summary formulas at the top auto-update.")
+        st.write("• Win/Loss summary formulas always auto update.")
         if os.path.exists(RESULTS_XLSX):
             with open(RESULTS_XLSX, "rb") as f:
                 data = f.read()

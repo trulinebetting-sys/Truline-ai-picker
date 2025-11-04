@@ -488,9 +488,9 @@ if st.session_state.get("has_data", False):
                     legs_df["Score"] = legs_df["Score"].map(lambda x: f"{float(x):.3f}")
                     st.dataframe(legs_df.drop(columns=["event_id"]), use_container_width=True, hide_index=True)
 # ──────────────────────────────────
-# Manual Result Updater
+# Manual Result Updater (NEW TAB)
 # ──────────────────────────────────
-with tabs.insert(len(SPORT_OPTIONS), "Update Results"):
+with tabs[-1]:
     st.subheader("Update Results (Win / Loss)")
 
     results_df = read_results_excel().copy()
@@ -515,22 +515,6 @@ with tabs.insert(len(SPORT_OPTIONS), "Update Results"):
             write_results_excel(results_df)
             st.success("✅ Results updated")
             st.experimental_rerun()
-    # Export tab
-    with tabs[-1]:
-        st.subheader("Results Excel (one sheet)")
-        st.write("• All picks append to **results.xlsx → Results**")
-        st.write("• Mark the **Result** column (Win/Loss) in Excel; summary formulas at the top auto-update.")
-        # Offer download of current file contents (if exists)
-        if os.path.exists(RESULTS_XLSX):
-            with open(RESULTS_XLSX, "rb") as f:
-                data = f.read()
-            st.download_button(
-                "Download results.xlsx",
-                data=data,
-                file_name="results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        else:
-            st.info("No results.xlsx yet. Generate picks first.")
+
 else:
     st.info("Click **Generate Weekly Picks** in the sidebar.")

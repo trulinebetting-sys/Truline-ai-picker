@@ -74,7 +74,8 @@ def fmt_pct(x: float) -> str:
 
 def assign_units_from_score(score: float) -> float:
     score = max(0.0, min(1.0, float(score)))
-    return round(0.5 + 4.5 * score, 1)
+    score2 = score * score        # ← squared confidence version
+    return round(0.5 + 4.5 * score2, 1)
 
 def decimal_to_american(dec: float) -> Optional[int]:
     if dec is None or pd.isna(dec) or dec <= 1.0:

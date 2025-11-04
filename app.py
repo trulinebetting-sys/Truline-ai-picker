@@ -487,7 +487,34 @@ if st.session_state.get("has_data", False):
                     legs_df = parlay["legs_df"].rename(columns={"EnsembleScore":"Score"}).copy()
                     legs_df["Score"] = legs_df["Score"].map(lambda x: f"{float(x):.3f}")
                     st.dataframe(legs_df.drop(columns=["event_id"]), use_container_width=True, hide_index=True)
+# ──────────────────────────────────
+# Manual Result Updater
+# ──────────────────────────────────
+with tabs.insert(len(SPORT_OPTIONS), "Update Results"):
+    st.subheader("Update Results (Win / Loss)")
 
+    results_df = read_results_excel().copy()
+
+    if results_df.empty:
+        st.info("No picks saved yet.")
+    else:
+        for i in range(len(results_df)):
+            c1, c2, c3 = st.columns([6,2,1])
+            with c1:
+                st.write(f"{results_df.iloc[i]['Date/Time']} — {results_df.iloc[i]['Sport']} — {results_df.iloc[i]['Matchup']}")
+            with c2:
+                new_val = st.selectbox(
+                    "",
+                    ["", "Win", "Loss"],
+                    index=["","Win","Loss"].index(str(results_df.iloc[i]["Result"])),
+                    key=f"result_row_{i}"
+                )
+                results_df.at[i,"Result"] = new_val
+
+        if st.button("Save Result Updates"):
+            write_results_excel(results_df)
+            st.success("✅ Results updated")
+            st.experimental_rerun()
     # Export tab
     with tabs[-1]:
         st.subheader("Results Excel (one sheet)")

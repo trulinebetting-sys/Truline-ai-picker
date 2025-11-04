@@ -456,7 +456,7 @@ if generate:
 # Render tabs per sport
 # ─────────────────────────────────────────────
 if st.session_state.get("has_data", False):
-    tabs = st.tabs(list(SPORT_OPTIONS.keys()) + ["📥 Export"])
+    tabs = st.tabs(list(SPORT_OPTIONS.keys()) + ["📝 Update Results", "📥 Export"])
 
     # Per sport tabs
     for idx, label in enumerate(SPORT_OPTIONS.keys()):
@@ -467,7 +467,7 @@ if st.session_state.get("has_data", False):
                 st.info("No picks found.")
             else:
                 show = picks.copy()
-                show = show.rename(columns={"EnsembleScore":"Score"})
+                show = show.rename(columns={"EnsembleScore": "Score"})
                 show["Score"] = show["Score"].map(lambda x: f"{float(x):.3f}")
                 st.dataframe(show.drop(columns=["event_id"]), use_container_width=True, hide_index=True)
 
@@ -477,44 +477,64 @@ if st.session_state.get("has_data", False):
             if parlay is None:
                 st.info("No parlay could be built.")
             else:
-                c1,c2,c3 = st.columns(3)
+                c1, c2, c3 = st.columns(3)
                 c1.metric("Legs", str(parlay["legs"]))
                 c2.metric("Parlay Odds (Dec)", str(parlay["parlay_decimal"]))
                 c3.metric("Suggested Units", str(parlay["suggested_units"]))
                 st.caption(f"Parlay Odds (US): {parlay['parlay_american'] if parlay['parlay_american'] is not None else 'N/A'}")
 
                 with st.expander("Show Parlay Legs"):
-                    legs_df = parlay["legs_df"].rename(columns={"EnsembleScore":"Score"}).copy()
+                    legs_df = parlay["legs_df"].rename(columns={"EnsembleScore": "Score"}).copy()
                     legs_df["Score"] = legs_df["Score"].map(lambda x: f"{float(x):.3f}")
                     st.dataframe(legs_df.drop(columns=["event_id"]), use_container_width=True, hide_index=True)
-# ──────────────────────────────────
-# Manual Result Updater (NEW TAB)
-# ──────────────────────────────────
-with tabs[-1]:
-    st.subheader("Update Results (Win / Loss)")
 
-    results_df = read_results_excel().copy()
+    # ──────────────────────────────────
+    # Manual Result Updater Tab
+    # ──────────────────────────────────
+    with tabs[-2]:
+        st.subheader("Update Results (Win / Loss)")
 
-    if results_df.empty:
-        st.info("No picks saved yet.")
-    else:
-        for i in range(len(results_df)):
-            c1, c2, c3 = st.columns([6,2,1])
-            with c1:
-                st.write(f"{results_df.iloc[i]['Date/Time']} — {results_df.iloc[i]['Sport']} — {results_df.iloc[i]['Matchup']}")
-            with c2:
-                new_val = st.selectbox(
-                    "",
-                    ["", "Win", "Loss"],
-                    index=["","Win","Loss"].index(str(results_df.iloc[i]["Result"])),
-                    key=f"result_row_{i}"
-                )
-                results_df.at[i,"Result"] = new_val
+        results_df = read_results_excel().copy()
 
-        if st.button("Save Result Updates"):
-            write_results_excel(results_df)
-            st.success("✅ Results updated")
-            st.experimental_rerun()
+        if results_df.empty:
+            st.info("No picks saved yet.")
+        else:
+            for i in range(len(results_df)):
+                c1, c2 = st.columns([6, 2])
+                with c1:
+                    st.write(f"{results_df.iloc[i]['Date/Time']} — {results_df.iloc[i]['Sport']} — {results_df.iloc[i]['Matchup']}")
+                with c2:
+                    new_val = st.selectbox(
+                        "",
+                        ["", "Win", "Loss"],
+                        index=["", "Win", "Loss"].index(str(results_df.iloc[i]["Result"])),
+                        key=f"result_row_{i}"
+                    )
+                    results_df.at[i, "Result"] = new_val
+
+            if st.button("Save Result Updates"):
+                write_results_excel(results_df)
+                st.success("✅ Results updated")
+                st.experimental_rerun()
+
+    # ──────────────────────────────────
+    # Export Tab
+    # ──────────────────────────────────
+    with tabs[-1]:
+        st.subheader("Results Excel (one sheet)")
+        st.write("• All picks append to **results.xlsx → Results**")
+        st.write("• Mark the **Result** column (Win/Loss) in Excel; summary formulas at the top auto-update.")
+        if os.path.exists(RESULTS_XLSX):
+            with open(RESULTS_XLSX, "rb") as f:
+                data = f.read()
+            st.download_button(
+                "Download results.xlsx",
+                data=data,
+                file_name="results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("No results.xlsx yet. Generate picks first.")
 
 else:
     st.info("Click **Generate Weekly Picks** in the sidebar.")
